@@ -195,7 +195,7 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
         ffmpeg_exe, "-y",
         "-framerate", "30",
         "-i", frame_pattern,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0",
         "-pix_fmt", "yuv420p",
         raw_video,
     ]

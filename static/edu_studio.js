@@ -11,6 +11,40 @@ let previewAnimId = null;
 let previewTime = 0;
 let previewAudio = null;
 
+// ── AI Model Status (Pod Studio style) ──────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAiModelInfo();
+});
+
+function loadAiModelInfo() {
+    const dot = document.getElementById('aiStatusDot');
+    const label = document.getElementById('aiStatusText');
+    const badge = document.getElementById('aiStatusBadge');
+    if (!dot || !label) return;
+
+    let settings = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
+    
+    // Migrate old settings to new format
+    if (!settings.vision) {
+        settings = {
+            vision: { source: 'custom', custom_base_url: 'http://localhost:20128/v1/chat/completions', custom_model: 'cx/gpt-5.4' },
+            script: settings.source ? settings : { source: 'cloud', cloud_provider: 'openai', cloud_model: 'gpt-4o-mini' }
+        };
+        localStorage.setItem('edu_ai_settings', JSON.stringify(settings));
+    }
+
+    const vSource = settings.vision.source || 'custom';
+    const sSource = settings.script.source || 'cloud';
+
+    const vModel = vSource === 'cloud' ? settings.vision.cloud_model : settings.vision.custom_model;
+    const sModel = sSource === 'cloud' ? settings.script.cloud_model : settings.script.custom_model;
+
+    label.textContent = `👁️ ${vModel || 'Vision'} | 🧠 ${sModel || 'Script'}`;
+    badge.title = `Vision: ${vSource} (${vModel})\nScript: ${sSource} (${sModel})\nClick để cấu hình`;
+    
+    dot.className = 'ai-dot green';
+}
 // ── Tab Navigation ──────────────────────────────────────────────
 
 document.querySelectorAll('.tab').forEach(tab => {
@@ -81,6 +115,24 @@ async function analyzeInput() {
     btn.disabled = true;
     msgEl.textContent = 'Đang gọi AI phân tích...';
 
+    // Reset Raw tab
+    const s1Status = document.getElementById('rawStage1Status');
+    const s1Output = document.getElementById('rawStage1Output');
+    const s2Status = document.getElementById('rawStage2Status');
+    const s2Output = document.getElementById('rawStage2Output');
+    const rawBadge = document.getElementById('rawBadge');
+
+    s1Status.textContent = '⏳ Chờ...';
+    s1Status.className = 'raw-stage-status';
+    s1Output.textContent = '';
+    s1Output.className = 'raw-output';
+    s2Status.textContent = '⏳ Chờ...';
+    s2Status.className = 'raw-stage-status';
+    s2Output.textContent = '';
+    s2Output.className = 'raw-output';
+    rawBadge.textContent = 'Đang xử lý...';
+    rawBadge.className = 'raw-badge';
+
     try {
         // Create project first
         const projResp = await fetch(`${API}/projects`, {
@@ -99,35 +151,142 @@ async function analyzeInput() {
         const formData = new FormData();
         formData.append('project_id', currentProject.id);
         formData.append('subject', subject);
+        formData.append('lang', document.getElementById('langSelect').value);
         if (text) formData.append('text', text);
         if (uploadedImageFile) formData.append('image', uploadedImageFile);
 
-        const resp = await fetch(`${API}/analyze`, {
+        // Lấy cấu hình AI
+        const aiSettings = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
+        formData.append('ai_settings', JSON.stringify(aiSettings));
+
+        const resp = await fetch(`${API}/analyze-stream`, {
             method: 'POST',
             body: formData,
         });
 
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.detail || 'Analysis failed');
+            throw new Error(`HTTP ${resp.status}`);
         }
 
-        const data = await resp.json();
-        currentScript = data.script;
-        renderScriptUI(currentScript);
-        msgEl.textContent = `✅ Đã tạo kịch bản: ${currentScript.steps.length} steps`;
+        // Switch to Raw tab to show streaming
+        document.querySelector('[data-tab="raw"]').click();
 
-        // Switch to script tab
-        setTimeout(() => {
-            document.querySelector('[data-tab="script"]').click();
-            statusEl.classList.add('hidden');
-        }, 1500);
+        // Track which stage we're in
+        let currentStage = 1;
+        s1Status.textContent = '🔄 Đang chạy...';
+        s1Status.className = 'raw-stage-status running';
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+        let stage1Text = '';
+        let stage2Text = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const ssLines = sseBuffer.split('\n');
+            sseBuffer = ssLines.pop() || '';
+            for (const ln of ssLines) {
+                if (!ln.startsWith('data: ')) continue;
+                const js = ln.substring(6).trim();
+                if (!js) continue;
+                try {
+                    const ev = JSON.parse(js);
+                    if (ev.type === 'status') {
+                        msgEl.textContent = ev.text;
+                        // Detect stage transitions
+                        if (ev.text.includes('Giai đoạn 2') || ev.text.includes('Viết kịch bản')) {
+                            // Stage 1 done → Stage 2 starts
+                            if (currentStage === 1) {
+                                s1Status.textContent = '✅ Hoàn thành';
+                                s1Status.className = 'raw-stage-status done';
+                                s1Output.className = 'raw-output active';
+                                currentStage = 2;
+                                s2Status.textContent = '🔄 Đang chạy...';
+                                s2Status.className = 'raw-stage-status running';
+                            }
+                        } else if (ev.text.includes('Vision') && ev.text.includes('đọc ảnh')) {
+                            s1Status.textContent = '🔄 Đang đọc ảnh...';
+                            s1Status.className = 'raw-stage-status running';
+                        } else if (ev.text.includes('Vision đã phân tích')) {
+                            s1Status.textContent = '✅ Hoàn thành';
+                            s1Status.className = 'raw-stage-status done';
+                        } else if (ev.text.includes('Dạng bài:')) {
+                            s1Status.textContent = ev.text;
+                            s1Status.className = 'raw-stage-status done';
+                        }
+                    } else if (ev.type === 'chunk') {
+                        if (currentStage === 1) {
+                            // Filter decorative headers
+                            const cleanText = ev.text.replace(/═{3,}[^\n]*═{3,}\n*/g, '').replace(/GIAI ĐOẠN \d[^\n]*\n*/g, '');
+                            if (cleanText.trim()) {
+                                stage1Text += cleanText;
+                                s1Output.textContent = stage1Text;
+                                s1Output.scrollTop = s1Output.scrollHeight;
+                                s1Output.className = 'raw-output active';
+                            }
+                        } else {
+                            const cleanText = ev.text.replace(/═{3,}[^\n]*═{3,}\n*/g, '').replace(/GIAI ĐOẠN \d[^\n]*\n*/g, '');
+                            if (cleanText.trim()) {
+                                stage2Text += cleanText;
+                                s2Output.textContent = stage2Text;
+                                s2Output.scrollTop = s2Output.scrollHeight;
+                                s2Output.className = 'raw-output active';
+                            }
+                        }
+                    } else if (ev.type === 'done') {
+                        currentScript = ev.script;
+                        s2Status.textContent = '✅ Hoàn thành';
+                        s2Status.className = 'raw-stage-status done';
+                        rawBadge.textContent = `✅ ${currentScript.steps.length} steps`;
+                        rawBadge.className = 'raw-badge active';
+                        // Clear old timing — must regenerate audio for new script
+                        currentTiming = null;
+                        renderScriptUI(currentScript);
+                        msgEl.textContent = `✅ Đã tạo kịch bản: ${currentScript.steps.length} steps`;
+                        setTimeout(() => statusEl.classList.add('hidden'), 2000);
+                        // Auto switch to Script tab after done
+                        setTimeout(() => document.querySelector('[data-tab="script"]').click(), 1500);
+                    } else if (ev.type === 'error') {
+                        msgEl.textContent = `❌ Lỗi: ${ev.text}`;
+                        if (currentStage === 1) {
+                            s1Status.textContent = '❌ Lỗi';
+                            s1Status.className = 'raw-stage-status error';
+                        } else {
+                            s2Status.textContent = '❌ Lỗi';
+                            s2Status.className = 'raw-stage-status error';
+                        }
+                        rawBadge.textContent = '❌ Lỗi';
+                    }
+                } catch (parseErr) { /* ignore */ }
+            }
+        }
 
     } catch (err) {
         msgEl.textContent = `❌ Lỗi: ${err.message}`;
     } finally {
         btn.disabled = false;
     }
+}
+
+function copyRawContent() {
+    const s1 = document.getElementById('rawStage1Output').textContent;
+    const s2 = document.getElementById('rawStage2Output').textContent;
+    const content = `=== VISION AI OUTPUT ===\n${s1}\n\n=== SCRIPT AI OUTPUT ===\n${s2}`;
+    navigator.clipboard.writeText(content).then(() => {
+        alert('Đã copy nội dung raw!');
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = content;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('Đã copy!');
+    });
 }
 
 // ── Render Script Steps UI ──────────────────────────────────────
@@ -298,7 +457,7 @@ async function renderVideo() {
 // ── Preview (Canvas in-browser) ─────────────────────────────────
 
 const THEMES = {
-    dark: { bg1:'#0a0a1a', bg2:'#1a1030', title:'#FFD700', text:'#F0F0F0', hl:'#FFD700', eqBg:'rgba(124,58,237,0.12)', eqBd:'rgba(167,139,250,0.4)', resBg:'rgba(0,255,136,0.1)', resBd:'#00FF88', tipBg:'rgba(251,191,36,0.1)', tipBd:'rgba(251,191,36,0.4)', cardBg:'rgba(255,255,255,0.06)', cardBd:'rgba(255,255,255,0.12)', progBg:'rgba(255,255,255,0.08)', prog:'#FFD700', geoBg:'rgba(255,255,255,0.03)', geoBd:'rgba(255,255,255,0.1)' },
+    dark: { bg1:'#0a0a1a', bg2:'#1a1030', title:'#FFD700', text:'#F0F0F0', hl:'#FFD700', eqBg:'rgba(124,58,237,0.12)', eqBd:'rgba(167,139,250,0.4)', resBg:'rgba(0,255,136,0.05)', resBd:'rgba(0,255,136,0.5)', tipBg:'rgba(251,191,36,0.1)', tipBd:'rgba(251,191,36,0.4)', cardBg:'rgba(255,255,255,0.06)', cardBd:'rgba(255,255,255,0.12)', progBg:'rgba(255,255,255,0.08)', prog:'#FFD700', geoBg:'rgba(255,255,255,0.03)', geoBd:'rgba(255,255,255,0.1)' },
     whiteboard: { bg1:'#F5F0E8', bg2:'#E8E0D0', title:'#1a1a1a', text:'#333', hl:'#E53E3E', eqBg:'rgba(49,130,206,0.08)', eqBd:'rgba(49,130,206,0.3)', resBg:'rgba(56,161,105,0.1)', resBd:'#38A169', tipBg:'rgba(237,137,54,0.1)', tipBd:'rgba(237,137,54,0.4)', cardBg:'rgba(0,0,0,0.03)', cardBd:'rgba(0,0,0,0.1)', progBg:'rgba(0,0,0,0.06)', prog:'#3182CE', geoBg:'rgba(0,0,0,0.02)', geoBd:'rgba(0,0,0,0.08)' },
     chalkboard: { bg1:'#1a3528', bg2:'#2D4A3E', title:'#FFFFFF', text:'#E0E0D0', hl:'#FFE066', eqBg:'rgba(255,255,255,0.05)', eqBd:'rgba(255,255,255,0.15)', resBg:'rgba(255,224,102,0.1)', resBd:'#FFE066', tipBg:'rgba(144,238,144,0.1)', tipBd:'rgba(144,238,144,0.3)', cardBg:'rgba(255,255,255,0.04)', cardBd:'rgba(255,255,255,0.1)', progBg:'rgba(255,255,255,0.06)', prog:'#FFE066', geoBg:'rgba(255,255,255,0.03)', geoBd:'rgba(255,255,255,0.08)' },
 };
@@ -309,6 +468,7 @@ function togglePreview() {
     document.getElementById('btnPlay').textContent = previewPlaying ? '⏸️ Pause' : '▶️ Play';
     if (previewPlaying) {
         previewTime = 0;
+        window.lastFrameTime = performance.now();
         // Load and play audio
         if (currentProject) {
             const projId = currentProject.id || currentProject;
@@ -374,9 +534,19 @@ function runPreview() {
     function measureH(el) {
         if (el.type === 'math_calc') {
             const fs = el.fontSize || 48;
-            let lines = (el.operands || []).length;
-            if (el.result) lines += 1;
-            return lines * (fs * 1.3) + 40;
+            if (el.op === ':') {
+                const leftLines = 1 + (el.intermediates ? el.intermediates.length : 0);
+                return Math.max(leftLines, 2) * (fs * 1.3) + 40;
+            } else {
+                let lines = (el.operands || []).length;
+                if (el.intermediates) lines += el.intermediates.length;
+                if (el.result || el.result_partial !== undefined) lines += 1;
+                let extraPad = 40;
+                if (el.intermediates && el.intermediates.length > 0 && (el.result || el.result_partial !== undefined)) {
+                    extraPad += 28;
+                }
+                return lines * (fs * 1.3) + extraPad;
+            }
         }
         const fs = el.fontSize || 40;
         const font = `${el.bold?'bold ':''}${fs}px sans-serif`;
@@ -403,8 +573,9 @@ function runPreview() {
         return h + 6;
     }
 
-    // Render math calc
-    function renderMathCalc(el, y) {
+    // Render math calc (with result_partial / reveal_result support)
+    function renderMathCalc(el, y, stepProgress) {
+        stepProgress = stepProgress ?? 1.0;
         const fs = el.fontSize || 48;
         ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
         ctx.fillStyle = rc(el.color || 'white');
@@ -412,59 +583,234 @@ function runPreview() {
         const cx = W / 2 + 80;
         let cy = y + 10;
         const ops = el.operands || [];
+        const inters = el.intermediates || [];
+        const fullResult = String(el.result || '');
+
+        if (el.op === ':') {
+            const cxLeft = W / 2 - 15;
+            const cxRight = W / 2 + 15;
+            
+            ctx.textAlign = 'right';
+            ctx.fillText(ops[0] || '', cxLeft, cy);
+            let cyLeft = cy + fs * 1.3;
+            for (let i = 0; i < inters.length; i++) {
+                ctx.fillText(inters[i], cxLeft, cyLeft);
+                cyLeft += fs * 1.3;
+            }
+
+            ctx.textAlign = 'left';
+            ctx.fillText(ops[1] || '', cxRight, cy);
+            
+            ctx.beginPath(); ctx.moveTo(W / 2, cy + fs * 1.2); ctx.lineTo(W / 2 + 150, cy + fs * 1.2);
+            ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
+            
+            let cyRight = cy + fs * 1.3 + 8;
+            
+            if (fullResult || el.result_partial !== undefined) {
+                const toDraw = (el.result_partial !== undefined && el.result_partial !== null) ? String(el.result_partial) : fullResult;
+                ctx.save();
+                if (el.result_partial !== undefined && el.result_partial !== null && toDraw.length > 0) {
+                    ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 22; ctx.fillStyle = '#00FF88';
+                } else if (el.reveal_result && stepProgress >= (el.reveal_at ?? 0.5)) {
+                    ctx.fillStyle = rc('green');
+                } else if (!el.reveal_result) {
+                    ctx.fillStyle = rc('green');
+                } else {
+                    ctx.globalAlpha = 0;
+                }
+                if (ctx.globalAlpha > 0) ctx.fillText(toDraw, cxRight, cyRight);
+                ctx.restore();
+                cyRight += fs * 1.3;
+            }
+
+            const totalHLeft = Math.max(cyLeft - cy, cyRight - cy);
+            ctx.beginPath(); ctx.moveTo(W / 2, cy - 5); ctx.lineTo(W / 2, cy + totalHLeft + 10);
+            ctx.stroke();
+
+            ctx.textAlign = 'left';
+            return Math.max(cyLeft, cyRight) - y + 10;
+        }
+        
+        const allStrs = [...ops.map(String), ...inters.map(String), fullResult];
+        const totalLen = Math.max(...allStrs.map(s => s.length));
+
         for (let i = 0; i < ops.length; i++) {
             ctx.fillText(ops[i], cx, cy);
             if (i === ops.length - 1 && el.op) {
                 ctx.textAlign = 'left';
-                const maxLen = Math.max(...ops.map(o => String(o).length), String(el.result || '').length);
-                const opOffset = maxLen * (fs * 0.6) + 30;
+                const opOffset = totalLen * (fs * 0.6) + 30;
                 ctx.fillText(el.op, cx - opOffset, cy);
                 ctx.textAlign = 'right';
             }
             cy += fs * 1.3;
         }
+
+        // Horizontal separator line 1
         cy += 8;
         ctx.beginPath(); ctx.moveTo(cx - 240, cy); ctx.lineTo(cx + 20, cy);
         ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
         cy += 20;
-        if (el.result) {
-            ctx.fillStyle = rc('green');
-            ctx.fillText(el.result, cx, cy);
+
+        // Intermediates
+        for (let i = 0; i < inters.length; i++) {
+            ctx.fillText(inters[i], cx, cy);
+            cy += fs * 1.3;
+        }
+
+        // Horizontal separator line 2
+        if (inters.length > 0 && (fullResult || el.result_partial !== undefined)) {
+            cy += 8;
+            ctx.beginPath(); ctx.moveTo(cx - 240, cy); ctx.lineTo(cx + 20, cy);
+            ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
+            cy += 20;
+        }
+
+        if (fullResult) {
+            const charW = ctx.measureText('0').width;
+            if (el.result_partial !== undefined && el.result_partial !== null) {
+                // MODE 1: Partial digit reveal
+                const partial = String(el.result_partial);
+                const totalDigits = fullResult.length;
+                const unwrittenCount = totalDigits - partial.length;
+                ctx.save();
+                for (let d = 0; d < unwrittenCount; d++) {
+                    const slotX = cx - (totalDigits - d - 1) * charW * 1.1;
+                    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                    ctx.fillText('_', slotX, cy);
+                }
+                if (partial.length > 0) {
+                    ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 22;
+                    ctx.fillStyle = '#00FF88';
+                    ctx.fillText(partial, cx, cy);
+                }
+                ctx.restore();
+            } else if (el.reveal_result) {
+                // MODE 2: Flip from '?' to result
+                const REVEAL_AT = el.reveal_at ?? 0.1; // Fix delay: reveal at 10% step duration
+                const revealed = stepProgress >= REVEAL_AT;
+                if (revealed) {
+                    const rp = Math.min((stepProgress - REVEAL_AT) / 0.2, 1);
+                    ctx.save();
+                    if (rp < 1) { ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 30*(1-rp); }
+                    ctx.fillStyle = rc('green');
+                    ctx.fillText(fullResult, cx, cy);
+                    ctx.restore();
+                } else {
+                    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+                    const tw = ctx.measureText('?').width;
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(255,215,0,${pulse})`; ctx.lineWidth = 2.5;
+                    ctx.beginPath(); ctx.roundRect(cx-tw-14, cy-4, tw+28, fs+8, 8); ctx.stroke();
+                    ctx.fillStyle = `rgba(255,215,0,${0.5+0.3*pulse})`;
+                    ctx.fillText('?', cx, cy);
+                    ctx.restore();
+                }
+            } else {
+                // MODE 3: Always show
+                ctx.fillStyle = rc('green');
+                ctx.fillText(fullResult, cx, cy);
+            }
             cy += fs * 1.3;
         }
         ctx.textAlign = 'left';
         return (cy - y) + 10;
     }
 
-    // Render step elements with dynamic box
-    function renderStepEls(elements, startY) {
+    // Render reveal element
+    function renderReveal(el, y, stepProgress) {
+        stepProgress = stepProgress ?? 1.0;
+        const fs = el.fontSize || 44;
+        const REVEAL_AT = el.reveal_at ?? 0.45;
+        const revealed = stepProgress >= REVEAL_AT;
+        const font = `bold ${fs}px sans-serif`;
+        ctx.font = font; ctx.textBaseline = 'top';
+        const align = el.align || 'center';
+        ctx.textAlign = align;
+        const tx = align==='center' ? W/2 : align==='right' ? W-MX : MX;
+
+        let displayText = el.label || '';
+        if (displayText.includes('?') && revealed) displayText = displayText.replace('?', el.value||'?');
+
+        let lineH = 0;
+        if (displayText) {
+            ctx.fillStyle = rc(el.color||'highlight');
+            for (const line of wrap(displayText, contentW, font)) { ctx.fillText(line, tx, y+lineH); lineH += fs*1.4; }
+        } else {
+            if (revealed) {
+                const rp = Math.min((stepProgress-REVEAL_AT)/0.2, 1);
+                ctx.save();
+                if (rp < 1) { ctx.shadowColor = th.hl; ctx.shadowBlur = 25*(1-rp); }
+                ctx.fillStyle = rc(el.color||'highlight');
+                ctx.fillText(el.value||'', tx, y);
+                ctx.restore();
+            } else {
+                const pulse = 0.6 + 0.4 * Math.sin(Date.now()/400);
+                const tw = ctx.measureText('?').width;
+                const bx = align==='center' ? W/2-tw/2-14 : tx-14;
+                ctx.save();
+                ctx.strokeStyle = `rgba(255,215,0,${pulse})`; ctx.lineWidth = 2.5;
+                ctx.beginPath(); ctx.roundRect(bx, y-4, tw+28, fs+8, 8); ctx.stroke();
+                ctx.fillStyle = `rgba(255,215,0,${0.5+0.3*pulse})`;
+                ctx.fillText('?', tx, y);
+                ctx.restore();
+            }
+            lineH = fs + 12;
+        }
+        ctx.textAlign = 'left';
+        return lineH + 6;
+    }
+
+    // Render unified elements with dynamic box
+    function renderUnifiedEls(unifiedEls, startY) {
         let y = startY, i = 0;
-        while (i < elements.length) {
-            const el = elements[i];
-            if (el.type==='point'||el.type==='segment'||el.type==='right_angle') { i++; continue; }
+        while (i < unifiedEls.length) {
+            const u = unifiedEls[i];
+            const el = u.el;
+            
+            if (el.type === 'gap') {
+                y += 18;
+                i++;
+                continue;
+            }
+
+            const alpha = Math.min((1 - Math.pow(1 - u.rawP, 3)) * 2.5, 1);
 
             if (el.type === 'box') {
                 const st = BOX_MAP[el.style] || BOX_MAP.subtle;
                 const inner = []; let j = i+1;
-                while (j < elements.length && (elements[j].type === 'text' || elements[j].type === 'math_calc')) { inner.push(elements[j]); j++; }
+                while (j < unifiedEls.length && (unifiedEls[j].el.type === 'text' || unifiedEls[j].el.type === 'math_calc' || unifiedEls[j].el.type === 'reveal')) { 
+                    inner.push(unifiedEls[j]); 
+                    j++; 
+                }
                 let innerH = 0;
-                for (const ie of inner) innerH += measureH(ie) + 6;
+                for (const iu of inner) innerH += measureH(iu.el) + 6;
                 const pad = 20, boxH = innerH + pad*2;
-                if (el.style==='result') { ctx.shadowColor = st.bd; ctx.shadowBlur = 15; }
+                
+                ctx.save();
+                ctx.globalAlpha = alpha;
                 ctx.beginPath(); ctx.roundRect(MX-10, y, contentW+20, boxH, 16);
                 ctx.fillStyle = st.bg; ctx.fill();
                 if (st.bd) { ctx.strokeStyle = st.bd; ctx.lineWidth = 2; ctx.stroke(); }
-                ctx.shadowBlur = 0;
+                ctx.restore();
+
                 let iy = y + pad;
-                for (const ie of inner) {
-                    if (ie.type === 'text') iy += renderText(ie, iy);
-                    else if (ie.type === 'math_calc') iy += renderMathCalc(ie, iy);
+                for (const iu of inner) {
+                    ctx.save();
+                    ctx.globalAlpha = Math.min((1 - Math.pow(1 - iu.rawP, 3)) * 2.5, 1);
+                    if (iu.el.type === 'text') iy += renderText(iu.el, iy);
+                    else if (iu.el.type === 'math_calc') iy += renderMathCalc(iu.el, iy, iu.rawP);
+                    else if (iu.el.type === 'reveal') iy += renderReveal(iu.el, iy, iu.rawP);
+                    ctx.restore();
                 }
                 y += boxH + 8;
                 i = j; continue;
             }
+            
+            ctx.save();
+            ctx.globalAlpha = alpha;
             if (el.type === 'text') { y += renderText(el, y); }
-            else if (el.type === 'math_calc') { y += renderMathCalc(el, y); }
+            else if (el.type === 'math_calc') { y += renderMathCalc(el, y, u.rawP); }
+            else if (el.type === 'reveal') { y += renderReveal(el, y, u.rawP); }
             else if (el.type === 'icon') {
                 const sz = el.size||64;
                 ctx.font = `${sz}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -486,9 +832,151 @@ function runPreview() {
                 ctx.closePath(); ctx.fillStyle=col; ctx.fill();
                 y += 30;
             }
+            ctx.restore();
             i++;
         }
         return y;
+    }
+
+    // ── Highlight helpers ──────────────────────────────────────
+    function normW(w) {
+        return String(w).toLowerCase().replace(/[.,;:!?"'()«»]/g, '').replace(/[.,]/g, '');
+    }
+    function getActiveWordNow(t) {
+        for (const ts of tSteps) {
+            if (!ts.words || !ts.words.length) continue;
+            for (const wb of ts.words) {
+                if (t >= wb.start && t < wb.end) return { norm: wb.norm || normW(wb.word), word: wb.word };
+            }
+        }
+        return null;
+    }
+    function drawHLBox(x, y, w, h, color) {
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = color || '#FFD700';
+        ctx.shadowColor = color || '#FFD700';
+        ctx.shadowBlur = 18;
+        ctx.beginPath(); ctx.roundRect(x-8, y-4, w+16, h+8, 10); ctx.fill();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        ctx.strokeStyle = color || '#FFD700'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.roundRect(x-8, y-4, w+16, h+8, 10); ctx.stroke();
+        ctx.restore();
+    }
+    function measureElH2(el) {
+        if (el.type === 'math_calc') {
+            const fs = el.fontSize || 48;
+            if (el.op === ':') {
+                const leftLines = 1 + (el.intermediates ? el.intermediates.length : 0);
+                return Math.max(leftLines, 2) * (fs * 1.3) + 40;
+            } else {
+                const lines = (el.operands||[]).length + (el.result ? 1 : 0);
+                return lines * (fs * 1.3) + 40;
+            }
+        }
+        if (el.type === 'text') {
+            const fs = el.fontSize || 40;
+            const font = `${el.bold?'bold ':''}${fs}px sans-serif`;
+            let h = 0;
+            for (const raw of (el.text||'').split('\n')) h += wrap(raw, contentW, font).length * fs * 1.4;
+            return h + 6;
+        }
+        if (el.type === 'icon') return (el.size||64)+10;
+        if (el.type === 'line') return 18;
+        if (el.type === 'arrow') return 30;
+        return 0;
+    }
+    function hlEl(el, y, aw) {
+        const h = measureElH2(el);
+        if (el.type === 'math_calc') {
+            const fs = el.fontSize || 48;
+            const cx = W/2 + 80; let cy = y + 10;
+            ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
+            for (const op of (el.operands||[])) {
+                const opN = normW(op);
+                if (opN && (opN===aw.norm || aw.norm.includes(opN) || opN.includes(aw.norm))) {
+                    const tw = ctx.measureText(op).width;
+                    drawHLBox(cx-tw, cy, tw, fs, '#FFD700');
+                }
+                cy += fs * 1.3;
+            }
+            cy += 28;
+            if (el.result) {
+                const rN = normW(el.result);
+                if (rN && (rN===aw.norm || aw.norm.includes(rN) || rN.includes(aw.norm))) {
+                    const tw = ctx.measureText(el.result).width;
+                    drawHLBox(cx-tw, cy, tw, fs, '#00FF88');
+                }
+            }
+        } else if (el.type === 'text') {
+            const fs = el.fontSize || 40;
+            const font = `${el.bold?'bold ':''}${fs}px sans-serif`;
+            const align = el.align || 'left';
+            ctx.font = font;
+            let lineY = y;
+            for (const raw of (el.text||'').split('\n')) {
+                for (const line of wrap(raw, contentW, font)) {
+                    const words2 = line.split(' ');
+                    let xOff = align==='center' ? W/2 - ctx.measureText(line).width/2
+                             : align==='right'  ? W - MX - ctx.measureText(line).width : MX;
+                    for (const w2 of words2) {
+                        const wn = normW(w2), ww = ctx.measureText(w2).width;
+                        if (wn && wn===aw.norm) drawHLBox(xOff, lineY, ww, fs*0.9, th.hl);
+                        xOff += ww + ctx.measureText(' ').width;
+                    }
+                    lineY += fs*1.4;
+                }
+            }
+        }
+        return h;
+    }
+    function drawHighlightsNow(t) {
+        const aw = getActiveWordNow(t);
+        if (!aw || !aw.norm) return;
+        let rf = 0;
+        for (let i = steps.length-1; i>=0; i--) {
+            if (tSteps[i] && t>=tSteps[i].start && steps[i].clear) { rf=i; break; }
+        }
+
+        const unifiedNonGeoEls = [];
+        for (let i = rf; i < steps.length; i++) {
+            const step = steps[i], ts = tSteps[i];
+            if (!ts || t < ts.start) continue;
+
+            let addedAny = false;
+            for (const el of (step.elements || [])) {
+                if (el.type==='point'||el.type==='segment'||el.type==='right_angle') continue;
+                let replaced = false;
+                if (el.type === 'math_calc') {
+                    const sig = el.op + '|' + (el.operands||[]).join('|');
+                    for (let j = unifiedNonGeoEls.length - 1; j >= 0; j--) {
+                        const u = unifiedNonGeoEls[j];
+                        if (u.el.type === 'math_calc' && u.el.op + '|' + (u.el.operands||[]).join('|') === sig) {
+                            unifiedNonGeoEls[j] = { el: el };
+                            replaced = true; break;
+                        }
+                    }
+                }
+                if (!replaced) { unifiedNonGeoEls.push({ el }); addedAny = true; }
+            }
+            if (addedAny) unifiedNonGeoEls.push({ el: { type: 'gap' } });
+        }
+
+        let cy2 = 80;
+        let ci = 0;
+        while (ci < unifiedNonGeoEls.length) {
+            const el = unifiedNonGeoEls[ci].el;
+            if (el.type === 'gap') { cy2 += 18; ci++; continue; }
+            if (el.type==='box') {
+                const inner=[]; let j=ci+1;
+                while (j<unifiedNonGeoEls.length && (unifiedNonGeoEls[j].el.type==='text'||unifiedNonGeoEls[j].el.type==='math_calc'||unifiedNonGeoEls[j].el.type==='reveal')) { inner.push(unifiedNonGeoEls[j].el); j++; }
+                let bH = 40; for (const ie of inner) bH += measureElH2(ie)+6;
+                let iy = cy2+20; for (const ie of inner) iy += hlEl(ie,iy,aw);
+                cy2 += bH+8; ci=j; continue;
+            }
+            cy2 += hlEl(el, cy2, aw) || measureElH2(el)+6;
+            ci++;
+        }
     }
 
     // Geometry zone renderer
@@ -542,38 +1030,67 @@ function runPreview() {
 
     // Find latest visible "clear" step
     let renderFrom = 0;
+    let clearTriggered = false;
     for (let i = steps.length - 1; i >= 0; i--) {
         const ts2 = tSteps[i];
-        if (ts2 && previewTime >= ts2.start && steps[i].clear) { renderFrom = i; break; }
+        if (ts2 && previewTime >= ts2.start && steps[i].clear) { 
+            renderFrom = i; 
+            if (i > 0) clearTriggered = true;
+            break; 
+        }
     }
 
+    if (clearTriggered) {
+        ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+        for (let d = 0; d < steps.length; d++) {
+            ctx.beginPath(); ctx.arc(dotX0 + d*dotGap + 15, 40, 6, 0, Math.PI*2);
+            ctx.fillStyle = d <= activeIdx ? th.prog : th.progBg; ctx.fill();
+        }
+    }
+
+    const unifiedNonGeoEls = [];
+    const unifiedGeoEls = [];
+    
     for (let i = renderFrom; i < steps.length; i++) {
         const step = steps[i], ts = tSteps[i];
         if (!ts || previewTime < ts.start) continue;
 
-        // Clear screen on scene change
-        if (step.clear && i > 0) {
-            ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-            for (let d = 0; d < steps.length; d++) {
-                ctx.beginPath(); ctx.arc(dotX0 + d*dotGap + 15, 40, 6, 0, Math.PI*2);
-                ctx.fillStyle = d <= activeIdx ? th.prog : th.progBg; ctx.fill();
-            }
-            cursorY = 80;
-        }
-
         const rawP = Math.min((previewTime - ts.start) / Math.max(ts.end - ts.start, 0.1), 1);
-        const alpha = Math.min((1 - Math.pow(1 - rawP, 3)) * 2.5, 1);
-        ctx.save(); ctx.globalAlpha = alpha;
-
-        const els = step.elements || [];
-        const geoEls = els.filter(e => e.type==='point'||e.type==='segment'||e.type==='right_angle');
-        const nonGeoEls = els.filter(e => e.type!=='point'&&e.type!=='segment'&&e.type!=='right_angle');
-
-        cursorY = renderStepEls(nonGeoEls, cursorY);
-        if (geoEls.length > 0) cursorY += renderGeoZone(geoEls, cursorY);
-        cursorY += 18;
-        ctx.restore();
+        let addedAny = false;
+        
+        for (const el of (step.elements || [])) {
+            if (el.type==='point'||el.type==='segment'||el.type==='right_angle') {
+                unifiedGeoEls.push({ el, rawP });
+                continue;
+            }
+            
+            let replaced = false;
+            if (el.type === 'math_calc') {
+                const sig = el.op + '|' + (el.operands||[]).join('|');
+                for (let j = unifiedNonGeoEls.length - 1; j >= 0; j--) {
+                    const u = unifiedNonGeoEls[j];
+                    if (u.el.type === 'math_calc' && u.el.op + '|' + (u.el.operands||[]).join('|') === sig) {
+                        unifiedNonGeoEls[j] = { el: el, rawP: u.rawP };
+                        replaced = true;
+                        break;
+                    }
+                }
+            }
+            if (!replaced) {
+                unifiedNonGeoEls.push({ el, rawP });
+                addedAny = true;
+            }
+        }
+        if (addedAny) unifiedNonGeoEls.push({ el: { type: 'gap' }, rawP: 1 });
     }
+
+    cursorY = renderUnifiedEls(unifiedNonGeoEls, cursorY);
+    if (unifiedGeoEls.length > 0) {
+        cursorY += renderGeoZone(unifiedGeoEls.map(u => u.el), cursorY);
+    }
+
+    // Highlight active word (karaoke style)
+    drawHighlightsNow(previewTime);
 
     // Progress bar
     const barW = W - 120, barX = 60, barY = H - 50;
@@ -587,17 +1104,24 @@ function runPreview() {
     const tm = Math.floor(totalDur / 60), ts2 = Math.floor(totalDur % 60);
     document.getElementById('timeDisplay').textContent = `${m}:${String(s).padStart(2,'0')} / ${tm}:${String(ts2).padStart(2,'0')}`;
 
-    previewTime += 1 / 30;
+    // Update previewTime based on real audio playback or accurate delta
+    if (previewAudio && !previewAudio.paused) {
+        previewTime = previewAudio.currentTime;
+    } else {
+        // fallback if no audio: use elapsed time since last frame
+        const now = performance.now();
+        const delta = (now - (window.lastFrameTime || now)) / 1000;
+        previewTime += delta;
+        window.lastFrameTime = now;
+    }
+
     if (previewTime >= totalDur) {
         previewPlaying = false;
         document.getElementById('btnPlay').textContent = '▶️ Play';
         if (previewAudio) { previewAudio.pause(); previewAudio.currentTime = 0; }
         return;
     }
-    // Sync audio time if drifted > 0.3s
-    if (previewAudio && !previewAudio.paused && Math.abs(previewAudio.currentTime - previewTime) > 0.3) {
-        previewAudio.currentTime = previewTime;
-    }
+
     previewAnimId = requestAnimationFrame(runPreview);
 }
 
@@ -616,8 +1140,134 @@ document.getElementById('seekBar')?.addEventListener('input', function() {
     if (previewAudio) {
         previewAudio.currentTime = previewTime;
     }
+    // Force redraw if paused
+    if (!previewPlaying) {
+        previewPlaying = true;
+        runPreview();
+        previewPlaying = false;
+        cancelAnimationFrame(previewAnimId);
+    }
 });
 
 // ── Init ────────────────────────────────────────────────────────
 console.log("🎓 EduVideo Studio loaded");
 
+// ── AI Settings Modal ───────────────────────────────────────────
+
+function openAISettingsModal() {
+    document.getElementById('aiSettingsModal').classList.remove('hidden');
+    loadAISettingsUI();
+}
+
+function closeAISettingsModal() {
+    document.getElementById('aiSettingsModal').classList.add('hidden');
+}
+
+function toggleAISource(type) {
+    const source = document.querySelector(`input[name="${type}Source"]:checked`).value;
+    document.getElementById(`${type}CloudAiSettings`).style.display = source === 'cloud' ? 'block' : 'none';
+    document.getElementById(`${type}CustomAiSettings`).style.display = source === 'custom' ? 'block' : 'none';
+    if (source === 'cloud') {
+        loadCloudModels(type);
+    }
+}
+
+async function loadCloudModels(type) {
+    const providerSelect = document.getElementById(`${type}CloudProvider`);
+    const modelSelect = document.getElementById(`${type}CloudModel`);
+    
+    if (providerSelect.options.length === 0) {
+        try {
+            const resp = await fetch('/api/v1/cloud-api/providers');
+            const data = await resp.json();
+            window.cloudProvidersCache = data.providers;
+            
+            providerSelect.innerHTML = data.providers.map(p => 
+                `<option value="${p.id}">${p.name || p.id}</option>`
+            ).join('');
+        } catch (e) {
+            console.warn("Could not load cloud providers:", e);
+            providerSelect.innerHTML = `<option value="openai">OpenAI</option>
+                                        <option value="gemini">Gemini</option>
+                                        <option value="deepseek">DeepSeek</option>`;
+        }
+    }
+    
+    const providerId = providerSelect.value;
+    const cache = window.cloudProvidersCache || [];
+    const pData = cache.find(p => p.id === providerId);
+    
+    if (pData && pData.models) {
+        modelSelect.innerHTML = pData.models.map(m => `<option value="${m}">${m}</option>`).join('');
+    } else {
+        const defaults = {
+            openai: ['gpt-4o', 'gpt-4-turbo', 'gpt-4o-mini'],
+            gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+            deepseek: ['deepseek-chat', 'deepseek-reasoner']
+        };
+        const models = defaults[providerId] || ['default-model'];
+        modelSelect.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+    }
+
+    const saved = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
+    const sec = saved[type] || {};
+    if (sec.source === 'cloud' && sec.cloud_provider === providerId && sec.cloud_model) {
+        modelSelect.value = sec.cloud_model;
+    }
+}
+
+function loadAISettingsUI() {
+    let settings = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
+    if (!settings.vision) {
+        settings = {
+            vision: { source: 'custom', custom_base_url: 'http://localhost:20128/v1/chat/completions', custom_model: 'cx/gpt-5.4' },
+            script: settings.source ? settings : { source: 'cloud', cloud_provider: 'openai', cloud_model: 'gpt-4o-mini' }
+        };
+    }
+    
+    ['vision', 'script'].forEach(type => {
+        const sec = settings[type];
+        document.querySelectorAll(`input[name="${type}Source"]`).forEach(el => {
+            el.checked = (el.value === sec.source);
+        });
+        
+        if (sec.cloud_provider) {
+            setTimeout(() => {
+                if(document.getElementById(`${type}CloudProvider`).querySelector(`option[value="${sec.cloud_provider}"]`)) {
+                    document.getElementById(`${type}CloudProvider`).value = sec.cloud_provider;
+                } else {
+                    document.getElementById(`${type}CloudProvider`).innerHTML += `<option value="${sec.cloud_provider}">${sec.cloud_provider}</option>`;
+                    document.getElementById(`${type}CloudProvider`).value = sec.cloud_provider;
+                }
+                loadCloudModels(type);
+            }, 100);
+        }
+        
+        document.getElementById(`${type}CustomBaseUrl`).value = sec.custom_base_url || 'http://localhost:20128/v1/chat/completions';
+        document.getElementById(`${type}CustomApiKey`).value = sec.custom_api_key || '';
+        document.getElementById(`${type}CustomModel`).value = sec.custom_model || 'cx/gpt-5.4';
+        
+        toggleAISource(type);
+    });
+}
+
+function saveAISettings() {
+    const settings = { vision: {}, script: {} };
+    
+    ['vision', 'script'].forEach(type => {
+        const source = document.querySelector(`input[name="${type}Source"]:checked`).value;
+        settings[type] = {
+            source: source,
+            cloud_provider: document.getElementById(`${type}CloudProvider`).value,
+            cloud_model: document.getElementById(`${type}CloudModel`).value,
+            custom_base_url: document.getElementById(`${type}CustomBaseUrl`).value,
+            custom_api_key: document.getElementById(`${type}CustomApiKey`).value,
+            custom_model: document.getElementById(`${type}CustomModel`).value
+        };
+    });
+    
+    localStorage.setItem('edu_ai_settings', JSON.stringify(settings));
+    closeAISettingsModal();
+    loadAiModelInfo();
+    alert('Đã lưu cấu hình AI!');
+}

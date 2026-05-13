@@ -15,7 +15,7 @@ from typing import Optional
 import importlib.util
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 
 logger = logging.getLogger("EduVideoStudio.Routes")
 
@@ -181,6 +181,8 @@ async def analyze_input(
         project_id = form.get("project_id", "")
         text_input = form.get("text", "")
         subject = form.get("subject", "general")
+        lang = form.get("lang", "vi")
+        ai_settings_str = form.get("ai_settings", "{}")
         img_file = form.get("image")
         if img_file and hasattr(img_file, "read"):
             image_bytes = await img_file.read()
@@ -189,6 +191,14 @@ async def analyze_input(
         project_id = body.get("project_id", "")
         text_input = body.get("text", "")
         subject = body.get("subject", "general")
+        lang = body.get("lang", "vi")
+        ai_settings_str = body.get("ai_settings", "{}")
+
+    import json
+    try:
+        ai_settings = json.loads(ai_settings_str) if isinstance(ai_settings_str, str) else ai_settings_str
+    except Exception:
+        ai_settings = {}
 
     if not text_input and not image_bytes:
         raise HTTPException(400, "Provide either text or image input")
@@ -201,6 +211,8 @@ async def analyze_input(
             text=text_input,
             image_bytes=image_bytes,
             subject=subject,
+            lang=lang,
+            ai_settings=ai_settings,
         )
 
         # Save to project if specified
@@ -220,6 +232,86 @@ async def analyze_input(
         logger.error(f"Analyze error: {e}")
         traceback.print_exc()
         raise HTTPException(500, f"Analysis failed: {str(e)}")
+
+
+@router.post("/analyze-stream")
+async def analyze_input_stream(
+    request: Request,
+    image: Optional[UploadFile] = File(None),
+):
+    """Streaming version of /analyze — returns SSE events."""
+    project_id = None
+    text_input = ""
+    image_bytes = None
+    subject = "general"
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart" in content_type:
+        form = await request.form()
+        project_id = form.get("project_id", "")
+        text_input = form.get("text", "")
+        subject = form.get("subject", "general")
+        lang = form.get("lang", "vi")
+        ai_settings_str = form.get("ai_settings", "{}")
+        img_file = form.get("image")
+        if img_file and hasattr(img_file, "read"):
+            image_bytes = await img_file.read()
+    else:
+        body = await request.json()
+        project_id = body.get("project_id", "")
+        text_input = body.get("text", "")
+        subject = body.get("subject", "general")
+        lang = body.get("lang", "vi")
+        ai_settings_str = body.get("ai_settings", "{}")
+
+    try:
+        ai_settings = json.loads(ai_settings_str) if isinstance(ai_settings_str, str) else ai_settings_str
+    except Exception:
+        ai_settings = {}
+
+    if not text_input and not image_bytes:
+        raise HTTPException(400, "Provide either text or image input")
+
+    script_gen = _load_engine("script_generator")
+    gen_stream = script_gen.generate_lesson_script_stream
+
+    async def event_generator():
+        final_script = None
+        try:
+            async for event in gen_stream(
+                text=text_input,
+                image_bytes=image_bytes,
+                subject=subject,
+                lang=lang,
+                ai_settings=ai_settings,
+            ):
+                event_type = event.get("type", "")
+                if event_type == "done":
+                    final_script = event.get("script")
+                    # Save to project
+                    if project_id and final_script:
+                        proj_dir = os.path.join(_projects_dir(), project_id)
+                        if os.path.isdir(proj_dir):
+                            _write_json(os.path.join(proj_dir, "lesson_script.json"), final_script)
+                            if image_bytes:
+                                img_path = os.path.join(proj_dir, "input_image.jpg")
+                                with open(img_path, "wb") as f:
+                                    f.write(image_bytes)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"Stream analyze error: {e}")
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'text': str(e)[:300]}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── TTS Audio Generation ────────────────────────────────────────

@@ -21,6 +21,10 @@
                 </div>
             </div>
             <div class="header-actions">
+                <div id="aiStatusBadge" class="ai-status-badge" onclick="openAISettingsModal()" title="Cài đặt AI">
+                    <span class="ai-dot" id="aiStatusDot"></span>
+                    <span id="aiStatusText">Đang tải...</span>
+                </div>
                 <select id="themeSelect" class="select-input">
                     <option value="dark">🌙 Dark</option>
                     <option value="whiteboard">📋 Whiteboard</option>
@@ -38,6 +42,7 @@
         <!-- Tabs -->
         <nav class="tabs">
             <button class="tab active" data-tab="input">📥 Input</button>
+            <button class="tab" data-tab="raw">📋 Raw Content</button>
             <button class="tab" data-tab="script">📝 Script</button>
             <button class="tab" data-tab="preview">🎬 Preview</button>
             <button class="tab" data-tab="export">📤 Export</button>
@@ -67,12 +72,29 @@
                             rows="10"></textarea>
                         <div class="input-row">
                             <select id="subjectSelect" class="select-input">
-                                <option value="math">📐 Toán học</option>
-                                <option value="science">🔬 Khoa học</option>
-                                <option value="language">📖 Ngôn ngữ</option>
-                                <option value="skill">💡 Kỹ năng</option>
-                                <option value="general">📚 Chung</option>
+                                <option value="auto" selected>✨ Tự động nhận diện (AI)</option>
+                                <optgroup label="📐 Dạng Toán">
+                                    <option value="dat_tinh">🔢 Đặt tính rồi tính</option>
+                                    <option value="dien_cho_trong">❓ Điền vào chỗ trống</option>
+                                    <option value="phan_tich_so">🔣 Phân tích / Giá trị số</option>
+                                    <option value="tia_so">📏 Tia số / Dãy số</option>
+                                    <option value="hinh_hoc">📐 Hình học / Đo lường</option>
+                                    <option value="word_problem">📖 Bài toán lời văn</option>
+                                </optgroup>
+                                <optgroup label="📚 Môn học khác">
+                                    <option value="science">🔬 Khoa học</option>
+                                    <option value="language">📖 Tiếng Việt / Ngôn ngữ</option>
+                                    <option value="skill">💡 Kỹ năng</option>
+                                    <option value="general">📚 Chung</option>
+                                </optgroup>
                             </select>
+                            <select id="langSelect" class="select-input" style="width: auto;">
+                                <option value="vi">🇻🇳 Tiếng Việt</option>
+                                <option value="en">🇺🇸 English</option>
+                            </select>
+                            <button class="btn" id="btnAISettings" onclick="openAISettingsModal()" title="Cài đặt AI">
+                                ⚙️ Cài đặt AI
+                            </button>
                             <button class="btn btn-primary btn-lg" id="btnAnalyze" onclick="analyzeInput()">
                                 🤖 AI Phân Tích
                             </button>
@@ -84,6 +106,36 @@
                 <div id="analyzeStatus" class="status-bar hidden">
                     <div class="spinner"></div>
                     <span id="analyzeMsg">Đang phân tích...</span>
+                </div>
+            </section>
+
+            <!-- RAW CONTENT TAB -->
+            <section class="tab-panel" id="panel-raw">
+                <div class="raw-header">
+                    <h2>📋 Raw Content — Kết quả phân tích thô</h2>
+                    <div class="raw-actions">
+                        <span class="raw-badge" id="rawBadge">Chưa có dữ liệu</span>
+                        <button class="btn" onclick="copyRawContent()" title="Copy nội dung">📋 Copy</button>
+                        <button class="btn" onclick="document.querySelector('[data-tab=script]').click()" title="Xem kịch bản JSON">📝 Xem Script →</button>
+                    </div>
+                </div>
+                <div class="raw-content-area">
+                    <div class="raw-stage" id="rawStage1">
+                        <div class="raw-stage-header">
+                            <span class="raw-stage-icon">👁️</span>
+                            <span class="raw-stage-title">Giai đoạn 1: Vision AI — Phân tích bài toán & hướng giải</span>
+                            <span class="raw-stage-status" id="rawStage1Status">⏳ Chờ...</span>
+                        </div>
+                        <pre class="raw-output" id="rawStage1Output">Chưa có dữ liệu. Nhấn "AI Phân Tích" ở tab Input để bắt đầu.</pre>
+                    </div>
+                    <div class="raw-stage" id="rawStage2">
+                        <div class="raw-stage-header">
+                            <span class="raw-stage-icon">🧠</span>
+                            <span class="raw-stage-title">Giai đoạn 2: Script AI — Viết kịch bản JSON</span>
+                            <span class="raw-stage-status" id="rawStage2Status">⏳ Chờ...</span>
+                        </div>
+                        <pre class="raw-output" id="rawStage2Output">Chờ giai đoạn 1 hoàn thành...</pre>
+                    </div>
                 </div>
             </section>
 
@@ -177,6 +229,93 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- AI Settings Modal -->
+    <div id="aiSettingsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ Cài đặt AI</h2>
+                <button class="close-btn" onclick="closeAISettingsModal()">✕</button>
+            </div>
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <!-- VISION AI SETTINGS -->
+                <h3 style="margin-top:0; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px; color:#FFD700;">👁️ Giai đoạn 1: Vision AI (Phân tích ảnh)</h3>
+                <div class="form-group">
+                    <label>Nguồn AI</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="visionSource" value="cloud" checked onclick="toggleAISource('vision')"> Hệ thống TubeCLI (Cloud)</label>
+                        <label><input type="radio" name="visionSource" value="custom" onclick="toggleAISource('vision')"> Custom Local API</label>
+                    </div>
+                </div>
+
+                <div id="visionCloudAiSettings" class="settings-section">
+                    <div class="form-group">
+                        <label>Provider</label>
+                        <select id="visionCloudProvider" class="input" onchange="loadCloudModels('vision')"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select id="visionCloudModel" class="input"></select>
+                    </div>
+                </div>
+
+                <div id="visionCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group">
+                        <label>Base URL (OpenAI Format)</label>
+                        <input type="text" id="visionCustomBaseUrl" class="input" placeholder="http://localhost:20128/v1/chat/completions">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="visionCustomApiKey" class="input" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label>Model Name</label>
+                        <input type="text" id="visionCustomModel" class="input" placeholder="cx/gpt-5.4">
+                    </div>
+                </div>
+
+                <!-- SCRIPT AI SETTINGS -->
+                <h3 style="margin-top:30px; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px; color:#22D3EE;">🧠 Giai đoạn 2: Script AI (Viết kịch bản)</h3>
+                <div class="form-group">
+                    <label>Nguồn AI</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="scriptSource" value="cloud" checked onclick="toggleAISource('script')"> Hệ thống TubeCLI (Cloud)</label>
+                        <label><input type="radio" name="scriptSource" value="custom" onclick="toggleAISource('script')"> Custom Local API</label>
+                    </div>
+                </div>
+
+                <div id="scriptCloudAiSettings" class="settings-section">
+                    <div class="form-group">
+                        <label>Provider</label>
+                        <select id="scriptCloudProvider" class="input" onchange="loadCloudModels('script')"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select id="scriptCloudModel" class="input"></select>
+                    </div>
+                </div>
+
+                <div id="scriptCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group">
+                        <label>Base URL (OpenAI Format)</label>
+                        <input type="text" id="scriptCustomBaseUrl" class="input" placeholder="http://localhost:20128/v1/chat/completions">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="scriptCustomApiKey" class="input" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label>Model Name</label>
+                        <input type="text" id="scriptCustomModel" class="input" placeholder="cx/gpt-5.4">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeAISettingsModal()">Hủy</button>
+                <button class="btn btn-primary" onclick="saveAISettings()">Lưu Cài Đặt</button>
+            </div>
+        </div>
     </div>
 
     <script src="/edu-video-studio-static/edu_studio.js"></script>

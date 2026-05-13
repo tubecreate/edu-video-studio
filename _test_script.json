@@ -1,0 +1,65 @@
+{
+  "title": "Kiểm tra đường thẳng vuông góc",
+  "subject": "math",
+  "total_steps": 5,
+  "steps": [
+    {
+      "id": 1,
+      "voice_text": "Chào các em! Hôm nay chúng ta sẽ học cách kiểm tra hai đường thẳng có vuông góc hay không bằng ê-ke.",
+      "elements": [
+        {"type": "icon", "emoji": "📐", "size": 64},
+        {"type": "text", "text": "Kiểm tra đường thẳng\nvuông góc", "fontSize": 52, "color": "title", "align": "center", "bold": true}
+      ]
+    },
+    {
+      "id": 2,
+      "voice_text": "Đề bài yêu cầu dùng ê-ke kiểm tra hai đường thẳng có vuông góc với nhau hay không. Ta sẽ xét 2 trường hợp.",
+      "elements": [
+        {"type": "line", "color": "muted", "dash": true},
+        {"type": "text", "text": "📋 Đề bài:", "fontSize": 38, "color": "highlight", "bold": true},
+        {"type": "text", "text": "Dùng ê-ke kiểm tra hai đường thẳng\ncó vuông góc với nhau hay không.", "fontSize": 36, "color": "text"}
+      ]
+    },
+    {
+      "id": 3,
+      "voice_text": "Cùng quan sát hai hình vẽ. Hình a có đường HA và HC giao tại H. Hình b có đường NM và NP giao tại N.",
+      "elements": [
+        {"type": "text", "text": "🔍 Quan sát hình vẽ:", "fontSize": 36, "color": "highlight", "bold": true},
+        {"type": "point", "id": "A", "x": 0.1, "y": 0.65, "label": "A", "color": "white"},
+        {"type": "point", "id": "H", "x": 0.3, "y": 0.45, "label": "H", "color": "yellow"},
+        {"type": "point", "id": "C", "x": 0.25, "y": 0.15, "label": "C", "color": "white"},
+        {"type": "segment", "from": "A", "to": "H", "color": "white"},
+        {"type": "segment", "from": "H", "to": "C", "color": "cyan"},
+        {"type": "point", "id": "N", "x": 0.7, "y": 0.35, "label": "N", "color": "yellow"},
+        {"type": "point", "id": "M", "x": 0.7, "y": 0.85, "label": "M", "color": "white"},
+        {"type": "point", "id": "P", "x": 0.95, "y": 0.35, "label": "P", "color": "white"},
+        {"type": "segment", "from": "N", "to": "M", "color": "white"},
+        {"type": "segment", "from": "N", "to": "P", "color": "white"},
+        {"type": "right_angle", "vertex": "N", "from": "M", "to": "P"}
+      ]
+    },
+    {
+      "id": 4,
+      "voice_text": "Ở hình a, khi đặt ê-ke vào góc tại H, ta thấy góc KHÔNG bằng 90 độ. Vậy HA và HC không vuông góc. Ở hình b, góc tại N đúng bằng 90 độ, vậy NM và NP vuông góc.",
+      "elements": [
+        {"type": "box", "style": "subtle"},
+        {"type": "text", "text": "a) HA và HC → Góc ≠ 90°", "fontSize": 38, "color": "red", "bold": true},
+        {"type": "text", "text": "❌ KHÔNG vuông góc", "fontSize": 36, "color": "red"},
+        {"type": "box", "style": "subtle"},
+        {"type": "text", "text": "b) NM và NP → Góc = 90°", "fontSize": 38, "color": "green", "bold": true},
+        {"type": "text", "text": "✅ Vuông góc!", "fontSize": 36, "color": "green"}
+      ]
+    },
+    {
+      "id": 5,
+      "voice_text": "Vậy kết luận: phần a không vuông góc, phần b vuông góc. Các em nhớ dùng ê-ke để kiểm tra nhé!",
+      "elements": [
+        {"type": "box", "style": "result"},
+        {"type": "text", "text": "🎯 Kết luận", "fontSize": 44, "color": "title", "align": "center", "bold": true},
+        {"type": "text", "text": "a) HA ⊥ HC: ❌ Không\nb) NM ⊥ NP: ✅ Có", "fontSize": 40, "color": "text"},
+        {"type": "box", "style": "tip"},
+        {"type": "text", "text": "💡 Đặt ê-ke vào góc giao\n→ Trùng 2 cạnh = vuông góc!", "fontSize": 30, "color": "text", "align": "center"}
+      ]
+    }
+  ]
+}

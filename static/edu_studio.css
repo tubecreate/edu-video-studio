@@ -70,6 +70,51 @@ body {
     align-items: center;
 }
 
+.ai-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+    margin-right: 4px;
+}
+
+.ai-status-badge:hover {
+    background: var(--bg2);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.ai-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #666;
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+
+.ai-dot.green { background: #22c55e; }
+.ai-dot.yellow { background: #eab308; }
+.ai-dot.red { background: #ef4444; }
+
+.ai-dot.green {
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+#aiStatusText {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
 /* ── Tabs ─────────────────────────────────────────────────────── */
 .tabs {
     display: flex;
@@ -556,3 +601,256 @@ textarea {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+
+/* ── Stream Area ─────────────────────────────────────────────── */
+.stream-area {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    animation: fadeIn 0.3s ease;
+}
+
+.stream-status {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--cyan);
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: rgba(34, 211, 238, 0.08);
+    border-radius: 8px;
+    border-left: 3px solid var(--cyan);
+}
+
+.stream-output {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    max-height: 500px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+}
+
+/* ── Modal ────────────────────────────────────────────────────── */
+.modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.modal-content {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    width: 480px;
+    max-width: 90vw;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+    font-size: 1.2rem;
+    color: var(--gold);
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+.modal-body {
+    padding: 20px 24px;
+}
+
+.modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+    font-size: 0.85rem;
+    color: var(--text);
+}
+
+.input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.9rem;
+}
+
+.radio-group {
+    display: flex;
+    gap: 20px;
+    padding: 8px 0;
+}
+
+.radio-group label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.settings-section {
+    margin-top: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+}
+
+/* ── Raw Content Tab ─────────────────────────────────────────── */
+
+.raw-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.raw-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.raw-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.raw-badge {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+}
+
+.raw-badge.active {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+}
+
+.raw-content-area {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.raw-stage {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg3);
+}
+
+.raw-stage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.raw-stage-icon {
+    font-size: 1rem;
+}
+
+.raw-stage-title {
+    flex: 1;
+}
+
+.raw-stage-status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    font-weight: 500;
+}
+
+.raw-stage-status.running {
+    background: rgba(234, 179, 8, 0.12);
+    color: #eab308;
+    animation: pulse-status 1.5s ease-in-out infinite;
+}
+
+.raw-stage-status.done {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+}
+
+.raw-stage-status.error {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+}
+
+@keyframes pulse-status {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.raw-output {
+    margin: 0;
+    padding: 16px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 350px;
+    overflow-y: auto;
+    background: transparent;
+}
+
+.raw-output.active {
+    color: var(--text);
+}

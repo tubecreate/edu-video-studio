@@ -131,6 +131,46 @@ function wrapText(text, maxW, font) {
 
 function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
 
+// ── Word Highlight Helpers ───────────────────────────────────────
+
+function normalizeWord(w) {
+    return String(w).toLowerCase().replace(/[.,;:!?"'()«»]/g, '').replace(/[.,]/g, '');
+}
+
+/** Find the word currently being spoken at currentTime across all visible steps */
+function getActiveWord(currentTime) {
+    for (const ts of timing.steps) {
+        if (!ts.words || !ts.words.length) continue;
+        for (const wb of ts.words) {
+            if (currentTime >= wb.start && currentTime < wb.end) {
+                return { norm: wb.norm, word: wb.word, stepId: ts.id };
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Draw a highlight glow box around a canvas region.
+ * type: 'box' (rounded rect glow) | 'underline'
+ */
+function drawHighlightBox(x, y, w, h, color) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = color || 'rgba(255,215,0,0.4)';
+    ctx.shadowColor = color || '#FFD700';
+    ctx.shadowBlur = 18;
+    roundRect(x - 8, y - 4, w + 16, h + 8, 10);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color || '#FFD700';
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 0;
+    roundRect(x - 8, y - 4, w + 16, h + 8, 10);
+    ctx.stroke();
+    ctx.restore();
+}
+
 // ── Color & Style resolvers ─────────────────────────────────────
 
 const COLORS = {
@@ -143,7 +183,7 @@ function rc(name) { return (COLORS[name] || COLORS.text)(); }
 
 const BOX_STYLES = {
     equation: () => ({ bg: T.eqBg, border: T.eqBorder, glow: false }),
-    result:   () => ({ bg: T.resultBg, border: T.resultBorder, glow: true }),
+    result:   () => ({ bg: T.resultBg, border: T.resultBorder, glow: false }), // removed glow to fix glare
     tip:      () => ({ bg: T.tipBg, border: T.tipBorder, glow: false }),
     subtle:   () => ({ bg: T.cardBg, border: T.cardBorder, glow: false }),
 };
@@ -153,9 +193,19 @@ const BOX_STYLES = {
 function measureTextHeight(el) {
     if (el.type === 'math_calc') {
         const fs = el.fontSize || 48;
-        let lines = (el.operands || []).length;
-        if (el.result) lines += 1;
-        return lines * (fs * 1.3) + 40; // 40 for line + padding
+        if (el.op === ':') {
+            const leftLines = 1 + (el.intermediates ? el.intermediates.length : 0);
+            return Math.max(leftLines, 2) * (fs * 1.3) + 40;
+        } else {
+            let lines = (el.operands || []).length;
+            if (el.intermediates) lines += el.intermediates.length;
+            if (el.result || el.result_partial !== undefined) lines += 1;
+            let extraPad = 40; // 1 separator
+            if (el.intermediates && el.intermediates.length > 0 && (el.result || el.result_partial !== undefined)) {
+                extraPad += 28; // 2 separators
+            }
+            return lines * (fs * 1.3) + extraPad;
+        }
     }
     const fs = el.fontSize || 40;
     const font = `${el.bold ? 'bold ' : ''}${fs}px ${T.font}`;
@@ -171,8 +221,10 @@ function measureTextHeight(el) {
 
 // ── Auto-layout element renderer ────────────────────────────────
 // Returns height consumed
+// stepProgress: 0.0–1.0, how far through this step's duration we are
 
-function renderElementAtY(el, cursorY) {
+function renderElementAtY(el, cursorY, stepProgress) {
+    stepProgress = stepProgress ?? 1.0;  // default fully revealed
     const contentW = W - MX * 2;
 
     switch (el.type) {
@@ -233,192 +285,334 @@ function renderElementAtY(el, cursorY) {
             return 30;
         }
         case 'math_calc': {
-            // {"type":"math_calc", "op":"+", "operands":["3458", "639"], "result":"4097", "color":"white"}
             const fs = el.fontSize || 48;
             ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
             ctx.fillStyle = rc(el.color || 'white');
             ctx.textAlign = 'right'; ctx.textBaseline = 'top';
 
-            const cx = W / 2 + 80; // Right align point
+            const cx = W / 2 + 80;
             let cy = cursorY + 10;
             const ops = el.operands || [];
+            const inters = el.intermediates || [];
+            const fullResult = String(el.result || '');
+
+            if (el.op === ':') {
+                // Vietnamese Long Division Layout
+                // Left side: Dividend and Intermediates (remainders)
+                // Right side: Divisor and Quotient
+                const cxLeft = W / 2 - 15;
+                const cxRight = W / 2 + 15;
+                
+                // Left column: right aligned
+                ctx.textAlign = 'right';
+                ctx.fillText(ops[0] || '', cxLeft, cy);
+                let cyLeft = cy + fs * 1.3;
+                for (let i = 0; i < inters.length; i++) {
+                    ctx.fillText(inters[i], cxLeft, cyLeft);
+                    cyLeft += fs * 1.3;
+                }
+
+                // Right column: left aligned
+                ctx.textAlign = 'left';
+                ctx.fillText(ops[1] || '', cxRight, cy);
+                
+                // Horizontal line under divisor
+                ctx.beginPath(); ctx.moveTo(W / 2, cy + fs * 1.2); ctx.lineTo(W / 2 + 150, cy + fs * 1.2);
+                ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
+                
+                let cyRight = cy + fs * 1.3 + 8;
+                
+                // Result
+                if (fullResult || el.result_partial !== undefined) {
+                    const toDraw = (el.result_partial !== undefined && el.result_partial !== null) ? String(el.result_partial) : fullResult;
+                    ctx.save();
+                    if (el.result_partial !== undefined && el.result_partial !== null && toDraw.length > 0) {
+                        ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 22; ctx.fillStyle = '#00FF88';
+                    } else if (el.reveal_result && stepProgress >= (el.reveal_at ?? 0.1)) {
+                        ctx.fillStyle = rc('green');
+                    } else if (!el.reveal_result) {
+                        ctx.fillStyle = rc('green');
+                    } else {
+                        // Not revealed yet
+                        ctx.globalAlpha = 0;
+                    }
+                    if (ctx.globalAlpha > 0) ctx.fillText(toDraw, cxRight, cyRight);
+                    ctx.restore();
+                    cyRight += fs * 1.3;
+                }
+
+                // Vertical line separating left and right
+                const totalHLeft = Math.max(cyLeft - cy, cyRight - cy);
+                ctx.beginPath(); ctx.moveTo(W / 2, cy - 5); ctx.lineTo(W / 2, cy + totalHLeft + 10);
+                ctx.stroke();
+
+                return Math.max(cyLeft, cyRight) - cursorY + 10;
+            }
+            
+            // Standard Vertical Layout (+, -, x)
+            
+            // Calculate max length to position the operator
+            const allStrs = [...ops.map(String), ...inters.map(String), fullResult];
+            const totalLen = Math.max(...allStrs.map(s => s.length));
 
             for (let i = 0; i < ops.length; i++) {
                 ctx.fillText(ops[i], cx, cy);
-                // Draw operator to the left of the last operand
                 if (i === ops.length - 1 && el.op) {
                     ctx.textAlign = 'left';
-                    const maxLen = Math.max(...ops.map(o => String(o).length), String(el.result || '').length);
-                    const opOffset = maxLen * (fs * 0.6) + 30;
+                    const opOffset = totalLen * (fs * 0.6) + 30;
                     ctx.fillText(el.op, cx - opOffset, cy);
                     ctx.textAlign = 'right';
                 }
                 cy += fs * 1.3;
             }
 
-            // Horizontal line
+            // Horizontal separator line 1
             cy += 8;
-            ctx.beginPath();
-            ctx.moveTo(cx - 240, cy);
-            ctx.lineTo(cx + 20, cy);
-            ctx.strokeStyle = ctx.fillStyle;
-            ctx.lineWidth = 4;
-            ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx - 240, cy); ctx.lineTo(cx + 20, cy);
+            ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
             cy += 20;
 
-            // Result
-            if (el.result) {
-                ctx.fillStyle = rc('green');
-                ctx.fillText(el.result, cx, cy);
+            // Intermediates
+            for (let i = 0; i < inters.length; i++) {
+                ctx.fillText(inters[i], cx, cy);
+                cy += fs * 1.3;
+            }
+
+            // Horizontal separator line 2 (if we had intermediates and a final result)
+            if (inters.length > 0 && (fullResult || el.result_partial !== undefined)) {
+                cy += 8;
+                ctx.beginPath(); ctx.moveTo(cx - 240, cy); ctx.lineTo(cx + 20, cy);
+                ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 4; ctx.stroke();
+                cy += 20;
+            }
+
+            // ── Result display (3 modes) ──────────────────────────
+            if (fullResult) {
+                const charW = ctx.measureText('0').width; // monospace char width
+
+                if (el.result_partial !== undefined && el.result_partial !== null) {
+                    // MODE 1: Partial reveal — digits appear one by one from right
+                    const partial = String(el.result_partial);
+                    const totalDigits = fullResult.length;
+                    
+                    ctx.save();
+                    // Draw dim placeholder slots for unwritten digits (left side)
+                    const unwrittenCount = totalDigits - partial.length;
+                    for (let d = 0; d < unwrittenCount; d++) {
+                        const slotX = cx - (totalDigits - d - 1) * charW * 1.1;
+                        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                        ctx.fillText('_', slotX, cy);
+                    }
+                    // Draw the partial result (right-aligned)
+                    if (partial.length > 0) {
+                        // Glow on the newest digit (leftmost of partial)
+                        ctx.shadowColor = '#00FF88';
+                        ctx.shadowBlur = 22;
+                        ctx.fillStyle = '#00FF88';
+                        ctx.fillText(partial, cx, cy);
+                    }
+                    ctx.restore();
+                    cy += fs * 1.3;
+
+                } else if (el.reveal_result) {
+                    // MODE 2: Classic reveal — shows '?' then flips to result
+                    const REVEAL_AT = el.reveal_at ?? 0.1;
+                    const revealed = stepProgress >= REVEAL_AT;
+                    if (revealed) {
+                        const rp = Math.min((stepProgress - REVEAL_AT) / 0.2, 1.0);
+                        ctx.save();
+                        ctx.globalAlpha = 0.9 + rp * 0.1;
+                        if (rp < 1) { ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 30 * (1 - rp); }
+                        ctx.fillStyle = rc('green');
+                        ctx.fillText(fullResult, cx, cy);
+                        ctx.restore();
+                    } else {
+                        const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+                        const tw = ctx.measureText('?').width;
+                        ctx.save();
+                        ctx.strokeStyle = `rgba(255,215,0,${pulse})`;
+                        ctx.lineWidth = 2.5;
+                        roundRect(cx - tw - 14, cy - 4, tw + 28, fs + 8, 8);
+                        ctx.stroke();
+                        ctx.fillStyle = `rgba(255,215,0,${0.5 + 0.3 * pulse})`;
+                        ctx.fillText('?', cx, cy);
+                        ctx.restore();
+                    }
+                    cy += fs * 1.3;
+
+                } else {
+                    // MODE 3: Always visible
+                    ctx.fillStyle = rc('green');
+                    ctx.fillText(fullResult, cx, cy);
+                }
                 cy += fs * 1.3;
             }
 
             ctx.textAlign = 'left';
             return (cy - cursorY) + 10;
         }
+        case 'reveal': {
+            // {"type":"reveal", "value":"319", "label":"a + b = b + ?", "fontSize":44, "color":"highlight", "align":"center", "reveal_at":0.4}
+            const fs = el.fontSize || 44;
+            const REVEAL_AT = el.reveal_at ?? 0.45;
+            const revealed = stepProgress >= REVEAL_AT;
+            const font = `bold ${fs}px ${T.font}`;
+            ctx.font = font; ctx.textBaseline = 'top';
+            const align = el.align || 'center';
+            ctx.textAlign = align;
+            const tx = align === 'center' ? W/2 : align === 'right' ? W - MX : MX;
+
+            // Draw label with placeholder if any
+            let displayText = el.label || '';
+            if (displayText.includes('?') && revealed) {
+                displayText = displayText.replace('?', el.value || '?');
+            }
+
+            let lineH = 0;
+            if (displayText) {
+                ctx.fillStyle = rc(el.color || 'highlight');
+                const wrapped = wrapText(displayText, W - MX*2, font);
+                for (const line of wrapped) { ctx.fillText(line, tx, cursorY + lineH); lineH += fs * 1.4; }
+            } else {
+                // Standalone value (no label)
+                const revealProg = revealed ? Math.min((stepProgress - REVEAL_AT) / 0.2, 1) : 0;
+                if (revealed) {
+                    ctx.save();
+                    if (revealProg < 1) { ctx.shadowColor = T.hlColor; ctx.shadowBlur = 25 * (1 - revealProg); }
+                    ctx.fillStyle = rc(el.color || 'highlight');
+                    ctx.fillText(el.value || '', tx, cursorY);
+                    ctx.restore();
+                } else {
+                    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+                    const tw = ctx.measureText('?').width;
+                    const bx = align==='center' ? W/2-tw/2-14 : tx-14;
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(255,215,0,${pulse})`; ctx.lineWidth = 2.5;
+                    roundRect(bx, cursorY-4, tw+28, fs+8, 8); ctx.stroke();
+                    ctx.fillStyle = `rgba(255,215,0,${0.5+0.3*pulse})`;
+                    ctx.fillText('?', tx, cursorY);
+                    ctx.restore();
+                }
+                lineH = fs + 12;
+            }
+
+            ctx.textAlign = 'left';
+            return lineH + 6;
+        }
         default:
             return 0;
     }
 }
 
-// ── Render a step's elements with dynamic box support ───────────
+// ── Unified Layout Builder ────────────────────────────────────────
 
-function renderStepElements(elements, startY) {
+function buildUnifiedLayout(currentTime, renderFrom, steps, tSteps) {
+    const nonGeoEls = [];
+    const geoEls = [];
+    
+    for (let i = renderFrom; i < steps.length; i++) {
+        const step = steps[i], ts = tSteps[i];
+        if (!ts || currentTime < ts.start) continue;
+
+        const rawP = Math.min((currentTime - ts.start) / Math.max(ts.end - ts.start, 0.1), 1);
+        let addedAny = false;
+        
+        for (const el of (step.elements || [])) {
+            if (el.type === 'point' || el.type === 'segment' || el.type === 'right_angle') {
+                geoEls.push({ el, rawP });
+                continue;
+            }
+            
+            let replaced = false;
+            // Deduplicate math_calc by operands and operator
+            if (el.type === 'math_calc') {
+                const sig = el.op + '|' + (el.operands||[]).join('|');
+                for (let j = nonGeoEls.length - 1; j >= 0; j--) {
+                    const u = nonGeoEls[j];
+                    if (u.el.type === 'math_calc' && u.el.op + '|' + (u.el.operands||[]).join('|') === sig) {
+                        nonGeoEls[j] = { el: el, rawP: u.rawP }; // keep old rawP so it stays fully visible
+                        replaced = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!replaced) {
+                nonGeoEls.push({ el, rawP });
+                addedAny = true;
+            }
+        }
+        
+        // Add a gap after this step's elements if we added any new vertical space
+        if (addedAny) {
+            nonGeoEls.push({ el: { type: 'gap' }, rawP: 1 });
+        }
+    }
+    
+    return { nonGeoEls, geoEls };
+}
+
+function renderUnifiedElements(unifiedEls, startY) {
     let cursorY = startY;
     let i = 0;
 
-    while (i < elements.length) {
-        const el = elements[i];
-
-        // Skip geometry (handled separately)
-        if (el.type === 'point' || el.type === 'segment' || el.type === 'right_angle') {
-            i++; continue;
+    while (i < unifiedEls.length) {
+        const u = unifiedEls[i];
+        const el = u.el;
+        
+        if (el.type === 'gap') {
+            cursorY += 18; // STEP_GAP
+            i++;
+            continue;
         }
 
-        // BOX: look ahead for text elements that go inside
+        const alpha = easeOut(Math.min(u.rawP * 2.5, 1));
+
         if (el.type === 'box') {
             const style = (BOX_STYLES[el.style] || BOX_STYLES.subtle)();
-
-            // Collect text elements after box (until next non-text or end)
-            const innerEls = [];
+            const inner = [];
             let j = i + 1;
-            while (j < elements.length && elements[j].type === 'text') {
-                innerEls.push(elements[j]);
+            while (j < unifiedEls.length && (unifiedEls[j].el.type === 'text' || unifiedEls[j].el.type === 'math_calc' || unifiedEls[j].el.type === 'reveal')) {
+                inner.push(unifiedEls[j]);
                 j++;
             }
 
-            // Measure total inner height
             let innerH = 0;
-            for (const ie of innerEls) innerH += measureTextHeight(ie) + 6;
+            for (const iu of inner) innerH += measureTextHeight(iu.el) + 6;
 
             const boxPadding = 20;
             const boxH = innerH + boxPadding * 2;
             const bx = MX - 10, bw = W - MX * 2 + 20;
 
-            // Draw box background
+            ctx.save();
+            ctx.globalAlpha = alpha;
             if (style.glow) { ctx.shadowColor = style.border; ctx.shadowBlur = 20; }
             roundRect(bx, cursorY, bw, boxH, 16);
             ctx.fillStyle = style.bg; ctx.fill();
-            if (style.border) {
-                ctx.strokeStyle = style.border; ctx.lineWidth = 2; ctx.stroke();
-            }
-            ctx.shadowBlur = 0;
+            if (style.border) { ctx.strokeStyle = style.border; ctx.lineWidth = 2; ctx.stroke(); }
+            ctx.restore();
 
-            // Render inner texts
             let innerY = cursorY + boxPadding;
-            for (const ie of innerEls) {
-                innerY += renderElementAtY(ie, innerY);
+            for (const iu of inner) {
+                ctx.save();
+                ctx.globalAlpha = easeOut(Math.min(iu.rawP * 2.5, 1));
+                innerY += renderElementAtY(iu.el, innerY, iu.rawP);
+                ctx.restore();
             }
 
             cursorY += boxH + 8;
-            i = j; // skip past inner elements
+            i = j;
             continue;
         }
 
-        // Regular element
-        cursorY += renderElementAtY(el, cursorY);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        cursorY += renderElementAtY(el, cursorY, u.rawP);
+        ctx.restore();
         i++;
     }
 
     return cursorY;
-}
-
-// ── Geometry zone renderer ──────────────────────────────────────
-// Reserves a rectangular area and maps point coords (0-1) into it
-
-function renderGeometryZone(geoElements, zoneY) {
-    const zonePad = 15;
-    const zoneX = MX;
-    const zoneW = W - MX * 2;
-    const zoneH = 400; // fixed height for geometry drawing area
-
-    // Draw zone background
-    roundRect(zoneX, zoneY, zoneW, zoneH, 12);
-    ctx.fillStyle = T.geoBg; ctx.fill();
-    ctx.strokeStyle = T.geoBorder; ctx.lineWidth = 1; ctx.stroke();
-
-    // Map coordinates: el.x/y (0-1) → zone pixel
-    const mapX = (rx) => zoneX + zonePad + rx * (zoneW - zonePad * 2);
-    const mapY = (ry) => zoneY + zonePad + ry * (zoneH - zonePad * 2);
-
-    // Collect points
-    const pts = {};
-    for (const el of geoElements) {
-        if (el.type === 'point') {
-            pts[el.id] = { x: mapX(el.x), y: mapY(el.y), label: el.label || el.id };
-        }
-    }
-
-    // Render all geometry
-    for (const el of geoElements) {
-        const col = rc(el.color || 'white');
-        switch (el.type) {
-            case 'segment': {
-                const f = pts[el.from], t = pts[el.to];
-                if (!f || !t) break;
-                ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(t.x, t.y);
-                ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.stroke();
-                // Label on segment middle
-                if (el.label) {
-                    const mx = (f.x + t.x) / 2, my = (f.y + t.y) / 2;
-                    ctx.font = `bold 26px ${T.font}`; ctx.fillStyle = rc(el.color || 'cyan');
-                    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-                    ctx.fillText(el.label, mx, my - 8);
-                    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-                }
-                break;
-            }
-            case 'right_angle': {
-                const v = pts[el.vertex], f = pts[el.from], t = pts[el.to];
-                if (!v || !f || !t) break;
-                const sz = 22;
-                const dx1 = f.x - v.x, dy1 = f.y - v.y;
-                const dx2 = t.x - v.x, dy2 = t.y - v.y;
-                const l1 = Math.sqrt(dx1*dx1 + dy1*dy1) || 1;
-                const l2 = Math.sqrt(dx2*dx2 + dy2*dy2) || 1;
-                ctx.beginPath();
-                ctx.moveTo(v.x + dx1/l1*sz, v.y + dy1/l1*sz);
-                ctx.lineTo(v.x + dx1/l1*sz + dx2/l2*sz, v.y + dy1/l1*sz + dy2/l2*sz);
-                ctx.lineTo(v.x + dx2/l2*sz, v.y + dy2/l2*sz);
-                ctx.strokeStyle = T.hlColor; ctx.lineWidth = 2; ctx.stroke();
-                break;
-            }
-            case 'point': {
-                const p = pts[el.id];
-                // Draw point dot
-                ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-                ctx.fillStyle = col; ctx.fill();
-                // Draw label
-                ctx.font = `bold 30px ${T.font}`; ctx.fillStyle = T.hlColor;
-                ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-                ctx.fillText(p.label, p.x, p.y - 12);
-                ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-                break;
-            }
-        }
-    }
-
-    return zoneH + 15; // return total consumed height
 }
 
 // ── Main render ─────────────────────────────────────────────────
@@ -428,7 +622,6 @@ function renderFrame(currentTime) {
     const steps = script.steps, tSteps = timing.steps;
     const totalDur = timing.total_duration || 30;
 
-    // Step dots
     let activeIdx = -1;
     for (let i = 0; i < tSteps.length; i++) if (currentTime >= tSteps[i].start) activeIdx = i;
     const dotCount = steps.length, dotGap = 30;
@@ -438,11 +631,7 @@ function renderFrame(currentTime) {
         ctx.fillStyle = i <= activeIdx ? T.progressFill : T.progressBg; ctx.fill();
     }
 
-    // AUTO-LAYOUT with scene/clear support
     let cursorY = 80;
-    const STEP_GAP = 18;
-
-    // Find the latest "clear" step that is visible — only render from there
     let renderFrom = 0;
     for (let i = steps.length - 1; i >= 0; i--) {
         const ts = tSteps[i];
@@ -452,46 +641,173 @@ function renderFrame(currentTime) {
         }
     }
 
-    for (let i = renderFrom; i < steps.length; i++) {
-        const step = steps[i], ts = tSteps[i];
-        if (!ts || currentTime < ts.start) continue;
-
-        // If this step clears screen, redraw background and reset Y
-        if (step.clear && i > 0) {
-            drawBg();
-            // Re-draw step dots
-            for (let d = 0; d < dotCount; d++) {
-                ctx.beginPath(); ctx.arc(dotStartX + d*dotGap + 15, 40, 6, 0, Math.PI*2);
-                ctx.fillStyle = d <= activeIdx ? T.progressFill : T.progressBg; ctx.fill();
-            }
-            cursorY = 80;
+    if (renderFrom > 0) {
+        drawBg();
+        for (let d = 0; d < dotCount; d++) {
+            ctx.beginPath(); ctx.arc(dotStartX + d*dotGap + 15, 40, 6, 0, Math.PI*2);
+            ctx.fillStyle = d <= activeIdx ? T.progressFill : T.progressBg; ctx.fill();
         }
-
-        const rawP = Math.min((currentTime - ts.start) / Math.max(ts.end - ts.start, 0.1), 1);
-        const alpha = easeOut(Math.min(rawP * 2.5, 1));
-
-        ctx.save();
-        ctx.globalAlpha = alpha;
-
-        const els = step.elements || [];
-
-        // Check if step has geometry
-        const geoEls = els.filter(e => e.type === 'point' || e.type === 'segment' || e.type === 'right_angle');
-        const nonGeoEls = els.filter(e => e.type !== 'point' && e.type !== 'segment' && e.type !== 'right_angle');
-
-        // Render non-geometry elements with auto-layout
-        cursorY = renderStepElements(nonGeoEls, cursorY);
-
-        // If step has geometry, render in a dedicated zone
-        if (geoEls.length > 0) {
-            cursorY += renderGeometryZone(geoEls, cursorY);
-        }
-
-        cursorY += STEP_GAP;
-        ctx.restore();
     }
 
+    const { nonGeoEls, geoEls } = buildUnifiedLayout(currentTime, renderFrom, steps, tSteps);
+
+    cursorY = renderUnifiedElements(nonGeoEls, cursorY);
+    
+    if (geoEls.length > 0) {
+        cursorY += renderGeometryZone(geoEls.map(g => g.el), cursorY);
+    }
+
+    drawHighlights(currentTime);
     drawProgress(currentTime, totalDur);
+}
+
+function drawHighlights(currentTime) {
+    const activeWord = getActiveWord(currentTime);
+    if (!activeWord) return;
+
+    const steps = script.steps, tSteps = timing.steps;
+    let renderFrom = 0;
+    for (let i = steps.length - 1; i >= 0; i--) {
+        const ts = tSteps[i];
+        if (ts && currentTime >= ts.start && steps[i].clear) { renderFrom = i; break; }
+    }
+
+    const { nonGeoEls } = buildUnifiedLayout(currentTime, renderFrom, steps, tSteps);
+    let cursorY = 80;
+    _measureAndHighlightUnified(nonGeoEls, cursorY, activeWord);
+}
+
+function _measureAndHighlightUnified(unifiedEls, startY, activeWord) {
+    let cursorY = startY;
+    let i = 0;
+
+    while (i < unifiedEls.length) {
+        const u = unifiedEls[i];
+        const el = u.el;
+        
+        if (el.type === 'gap') {
+            cursorY += 18;
+            i++;
+            continue;
+        }
+
+        if (el.type === 'box') {
+            const inner = [];
+            let j = i + 1;
+            while (j < unifiedEls.length && (unifiedEls[j].el.type === 'text' || unifiedEls[j].el.type === 'math_calc' || unifiedEls[j].el.type === 'reveal')) {
+                inner.push(unifiedEls[j]);
+                j++;
+            }
+            
+            const pad = 20;
+            let iy = cursorY + pad;
+            let boxH = pad * 2;
+            for (const iu of inner) boxH += _measureElH(iu.el) + 6;
+
+            for (const iu of inner) {
+                const consumed = _highlightEl(iu.el, iy, activeWord);
+                iy += consumed;
+            }
+            cursorY += boxH + 8;
+            i = j;
+            continue;
+        }
+
+        const consumed = _highlightEl(el, cursorY, activeWord);
+        cursorY += consumed || _measureElH(el) + 6;
+        i++;
+    }
+    return cursorY;
+}
+
+function _measureElH(el) {
+    const contentW = W - MX * 2;
+    if (el.type === 'math_calc') {
+        const fs = el.fontSize || 48;
+        const lines = (el.operands || []).length + (el.result ? 1 : 0);
+        return lines * (fs * 1.3) + 40 + 6;
+    }
+    if (el.type === 'text') {
+        const fs = el.fontSize || 40;
+        const font = `${el.bold ? 'bold ' : ''}${fs}px ${T.font}`;
+        let h = 0;
+        for (const raw of (el.text || '').split('\n')) {
+            h += wrapText(raw, contentW, font).length * fs * 1.4;
+        }
+        return h + 6;
+    }
+    if (el.type === 'icon') return (el.size || 64) + 10;
+    if (el.type === 'line') return 18;
+    if (el.type === 'arrow') return 30;
+    return 0;
+}
+
+/** Try to find & highlight active word inside a single element. Returns height consumed. */
+function _highlightEl(el, y, activeWord) {
+    const h = _measureElH(el);
+
+    if (el.type === 'math_calc') {
+        const fs = el.fontSize || 48;
+        const cx = W / 2 + 80;
+        let cy = y + 10;
+        const ops = el.operands || [];
+
+        for (let k = 0; k < ops.length; k++) {
+            const opNorm = normalizeWord(ops[k]);
+            if (opNorm === activeWord.norm || activeWord.norm.includes(opNorm) || opNorm.includes(activeWord.norm)) {
+                // Measure text width with monospace font
+                ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
+                const tw = ctx.measureText(ops[k]).width;
+                drawHighlightBox(cx - tw, cy, tw, fs, '#FFD700');
+            }
+            cy += fs * 1.3;
+        }
+        // Result highlight
+        cy += 28; // separator line
+        if (el.result) {
+            const resNorm = normalizeWord(el.result);
+            if (resNorm === activeWord.norm || activeWord.norm.includes(resNorm) || resNorm.includes(activeWord.norm)) {
+                ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
+                const tw = ctx.measureText(el.result).width;
+                drawHighlightBox(cx - tw, cy, tw, fs, '#00FF88');
+            }
+        }
+        return h;
+    }
+
+    if (el.type === 'text') {
+        const fs = el.fontSize || 40;
+        const font = `${el.bold ? 'bold ' : ''}${fs}px ${T.font}`;
+        const align = el.align || 'left';
+        ctx.font = font;
+        const contentW = W - MX * 2;
+        let lineY = y;
+
+        for (const raw of (el.text || '').split('\n')) {
+            const wrapped = wrapText(raw, contentW, font);
+            for (const line of wrapped) {
+                // Check if active word appears in this line
+                const lineNorm = normalizeWord(line);
+                const wordsInLine = line.split(' ');
+                let xOff = align === 'center' ? W/2 - ctx.measureText(line).width/2
+                         : align === 'right'  ? W - MX - ctx.measureText(line).width
+                         : MX;
+
+                for (const w of wordsInLine) {
+                    const wNorm = normalizeWord(w);
+                    const ww = ctx.measureText(w).width;
+                    if (wNorm && wNorm === activeWord.norm) {
+                        drawHighlightBox(xOff, lineY, ww, fs * 0.9, T.hlColor);
+                    }
+                    xOff += ww + ctx.measureText(' ').width;
+                }
+                lineY += fs * 1.4;
+            }
+        }
+        return h;
+    }
+
+    return h;
 }
 
 // ── Main loop ───────────────────────────────────────────────────
@@ -526,9 +842,10 @@ const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames'
         }
 
         ffArgs.push(
-            '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '20',
+            '-c:v', 'h264_nvenc',
+            '-preset', 'p4',
+            '-cq', '20',
+            '-b:v', '0',
             '-pix_fmt', 'yuv420p',
             '-shortest',
             outputFile

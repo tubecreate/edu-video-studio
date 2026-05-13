@@ -1,6 +1,6 @@
 """
-EduVideo Studio — TTS Audio Engine.
-Generates per-step audio using edge-tts (via tts_vibevoice) and builds a timing map.
+EduVideo Studio — TTS Audio Engine v2.
+Generates per-step audio using edge-tts and captures word-level timing (WordBoundary).
 """
 import os
 import json
@@ -23,25 +23,71 @@ async def _get_audio_duration(filepath: str) -> float:
         return float(data.get("format", {}).get("duration", 0))
     except Exception as e:
         logger.warning(f"ffprobe failed for {filepath}: {e}")
-        return 3.0  # Fallback estimate
+        return 3.0
 
 
-async def _generate_edge_tts(text: str, voice: str, output_path: str) -> bool:
-    """Generate audio using edge-tts directly."""
+def _normalize_word(w: str) -> str:
+    """Normalize a word for matching: lowercase, strip punctuation, remove thousands separators."""
+    import re
+    w = w.lower().strip()
+    w = re.sub(r"[.,;:!?\"'()«»]", "", w)
+    w = w.replace(".", "").replace(",", "")  # remove thousand separators
+    return w
+
+
+async def _generate_edge_tts_with_words(text: str, voice: str, output_path: str):
+    """
+    Generate audio using edge-tts and capture WordBoundary events.
+    Returns (success: bool, words: list[{word, start, end}])
+    """
     try:
         import edge_tts
         communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(output_path)
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 100
+
+        word_boundaries = []
+        audio_chunks = []
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                # offset is in 100-nanosecond units, duration too
+                start_sec = chunk["offset"] / 10_000_000.0
+                dur_sec   = chunk["duration"] / 10_000_000.0
+                word_boundaries.append({
+                    "word":  chunk["text"],
+                    "norm":  _normalize_word(chunk["text"]),
+                    "start": round(start_sec, 3),
+                    "end":   round(start_sec + dur_sec, 3),
+                })
+
+        if not audio_chunks:
+            return False, []
+
+        with open(output_path, "wb") as f:
+            for c in audio_chunks:
+                f.write(c)
+
+        return os.path.getsize(output_path) > 100, word_boundaries
+
     except Exception as e:
-        logger.error(f"edge-tts error: {e}")
-        return False
+        logger.error(f"edge-tts stream error: {e}")
+        return False, []
 
 
-async def _generate_tts_internal(text: str, voice: str, output_path: str, engine: str = "edge") -> bool:
-    """Try internal TTS API first, fallback to direct edge-tts."""
+async def _generate_edge_tts(text: str, voice: str, output_path: str) -> bool:
+    """Generate audio using edge-tts (simple, no word boundaries)."""
+    success, _ = await _generate_edge_tts_with_words(text, voice, output_path)
+    return success
+
+
+async def _generate_tts_internal(text: str, voice: str, output_path: str, engine: str = "edge"):
+    """
+    Try internal TTS API first, fallback to direct edge-tts.
+    Returns (success: bool, words: list)
+    """
     if engine == "edge":
-        return await _generate_edge_tts(text, voice, output_path)
+        return await _generate_edge_tts_with_words(text, voice, output_path)
 
     # Try vibevoice/viterbox via internal API
     try:
@@ -55,7 +101,6 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
                 data = resp.json()
                 task_id = data.get("task_id")
                 if task_id:
-                    # Poll for completion
                     for _ in range(60):
                         await asyncio.sleep(1)
                         status_resp = await client.get(f"http://localhost:5295/api/v1/tts/status/{task_id}")
@@ -64,20 +109,19 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
                             if sdata.get("status") == "done":
                                 audio_url = sdata.get("audio_url", "")
                                 if audio_url:
-                                    # Download the audio file
                                     dl_resp = await client.get(f"http://localhost:5295{audio_url}")
                                     if dl_resp.status_code == 200:
                                         with open(output_path, "wb") as f:
                                             f.write(dl_resp.content)
-                                        return True
+                                        return True, []
                             elif sdata.get("status") == "error":
                                 break
-                    return False
+                    return False, []
     except Exception as e:
         logger.warning(f"Internal TTS API failed ({engine}): {e}, falling back to edge-tts")
 
-    # Fallback to edge-tts
-    return await _generate_edge_tts(text, voice, output_path)
+    # Fallback to edge-tts with word boundaries
+    return await _generate_edge_tts_with_words(text, voice, output_path)
 
 
 async def _merge_audio_files(audio_files: list, output_path: str, gaps: list = None):
@@ -90,7 +134,6 @@ async def _merge_audio_files(audio_files: list, output_path: str, gaps: list = N
         shutil.copy2(audio_files[0], output_path)
         return
 
-    # Build ffmpeg filter for concat with silence gaps
     inputs = []
     filter_parts = []
     idx = 0
@@ -100,7 +143,6 @@ async def _merge_audio_files(audio_files: list, output_path: str, gaps: list = N
         filter_parts.append(f"[{idx}:a]")
         idx += 1
 
-        # Add silence gap between steps (0.5s)
         if i < len(audio_files) - 1:
             gap_dur = 0.5
             if gaps and i < len(gaps):
@@ -133,7 +175,7 @@ async def generate_tts_for_script(
     tts_engine: str = "edge",
     progress_callback: Optional[Callable] = None,
 ) -> dict:
-    """Generate TTS audio for each step and build timing map."""
+    """Generate TTS audio for each step and build timing map with word-level boundaries."""
     os.makedirs(output_dir, exist_ok=True)
     steps = script.get("steps", [])
     total = len(steps)
@@ -141,6 +183,7 @@ async def generate_tts_for_script(
     timing_steps = []
     audio_files = []
     current_offset = 0.0
+    GAP = 0.5  # seconds between steps
 
     for i, step in enumerate(steps):
         voice_text = step.get("voice_text", "").strip()
@@ -151,7 +194,6 @@ async def generate_tts_for_script(
             progress_callback(pct, f"Generating audio step {i+1}/{total}...")
 
         if not voice_text:
-            # Silent step — use a short pause
             duration = 2.0
             timing_steps.append({
                 "id": step_id,
@@ -159,24 +201,35 @@ async def generate_tts_for_script(
                 "end": round(current_offset + duration, 3),
                 "audio": None,
                 "duration": duration,
+                "words": [],
             })
-            current_offset += duration + 0.3
+            current_offset += duration + GAP
             continue
 
         audio_filename = f"step_{step_id:03d}.mp3"
         audio_path = os.path.join(output_dir, audio_filename)
 
-        success = await _generate_tts_internal(voice_text, voice, audio_path, tts_engine)
+        success, word_boundaries = await _generate_tts_internal(voice_text, voice, audio_path, tts_engine)
 
         if success and os.path.exists(audio_path):
             duration = await _get_audio_duration(audio_path)
             if duration < 0.5:
-                duration = max(len(voice_text) * 0.08, 2.0)  # Estimate ~80ms per char
+                duration = max(len(voice_text) * 0.08, 2.0)
         else:
             duration = max(len(voice_text) * 0.08, 2.0)
             logger.warning(f"TTS failed for step {step_id}, using estimated duration {duration:.1f}s")
             audio_path = None
             audio_filename = None
+
+        # Shift word boundaries by current_offset so they're absolute times
+        shifted_words = []
+        for wb in word_boundaries:
+            shifted_words.append({
+                "word": wb["word"],
+                "norm": wb["norm"],
+                "start": round(wb["start"] + current_offset, 3),
+                "end":   round(wb["end"] + current_offset, 3),
+            })
 
         timing_steps.append({
             "id": step_id,
@@ -184,12 +237,13 @@ async def generate_tts_for_script(
             "end": round(current_offset + duration, 3),
             "audio": audio_filename,
             "duration": round(duration, 3),
+            "words": shifted_words,
         })
 
         if audio_path:
             audio_files.append(audio_path)
 
-        current_offset += duration + 0.5  # 0.5s gap between steps
+        current_offset += duration + GAP
 
     total_duration = round(current_offset, 3)
 
