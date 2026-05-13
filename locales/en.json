@@ -1,0 +1,18 @@
+{
+    "edu.title": "EduVideo Studio",
+    "edu.subtitle": "Create step-by-step educational videos with AI",
+    "edu.tab_input": "Input",
+    "edu.tab_script": "Script",
+    "edu.tab_preview": "Preview",
+    "edu.tab_export": "Export",
+    "edu.upload_title": "Upload lesson image",
+    "edu.upload_desc": "Drag & drop or click to select",
+    "edu.text_title": "Or enter lesson text",
+    "edu.btn_analyze": "AI Analyze",
+    "edu.btn_gen_audio": "Generate Voice",
+    "edu.btn_render": "Render Video",
+    "edu.btn_download": "Download Video",
+    "edu.theme_dark": "Dark",
+    "edu.theme_whiteboard": "Whiteboard",
+    "edu.theme_chalkboard": "Chalkboard"
+}

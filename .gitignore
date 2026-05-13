@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+projects/
+frames/
+*.mp4
+*.mp3
+.DS_Store
+.vscode/

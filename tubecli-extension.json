@@ -1,0 +1,20 @@
+{
+  "name": "edu_video_studio",
+  "display_name": "EduVideo Studio",
+  "version": "1.0.0",
+  "description": "Tạo video dạy học step-by-step — AI sinh kịch bản, animation tự động, voice đồng bộ",
+  "author": "TubeCreate",
+  "entry": "extension.py",
+  "extension_class": "EduVideoExtension",
+  "icon": "🎓",
+  "dependencies": [],
+  "nodes": [],
+  "skill_md": "SKILL.md",
+  "ui_static": "static",
+  "api_prefix": "/api/v1/edu_video",
+  "page_url": "/edu-video-studio",
+  "min_tubecli_version": "0.3.0",
+  "category": "extension",
+  "tags": ["education", "video", "math", "tutorial", "dạy học"],
+  "license": "MIT"
+}

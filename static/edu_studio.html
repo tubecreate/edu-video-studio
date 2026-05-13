@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎓 EduVideo Studio — TubeCreate</title>
+    <meta name="description" content="Tạo video dạy học step-by-step với AI">
+    <link rel="stylesheet" href="/edu-video-studio-static/edu_studio.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="/static/i18n.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <span class="header-icon">🎓</span>
+                <div>
+                    <h1>EduVideo Studio</h1>
+                    <p class="header-subtitle">Tạo video dạy học step-by-step với AI</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <select id="themeSelect" class="select-input">
+                    <option value="dark">🌙 Dark</option>
+                    <option value="whiteboard">📋 Whiteboard</option>
+                    <option value="chalkboard">🏫 Chalkboard</option>
+                </select>
+                <select id="voiceSelect" class="select-input">
+                    <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
+                    <option value="vi-VN-NamMinhNeural">🇻🇳 Nam Minh (Nam)</option>
+                    <option value="en-US-AriaNeural">🇺🇸 Aria (EN)</option>
+                    <option value="en-US-GuyNeural">🇺🇸 Guy (EN)</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="input">📥 Input</button>
+            <button class="tab" data-tab="script">📝 Script</button>
+            <button class="tab" data-tab="preview">🎬 Preview</button>
+            <button class="tab" data-tab="export">📤 Export</button>
+        </nav>
+
+        <!-- Tab Panels -->
+        <main class="main-content">
+            <!-- INPUT TAB -->
+            <section class="tab-panel active" id="panel-input">
+                <div class="input-grid">
+                    <!-- Image Upload -->
+                    <div class="card upload-card" id="dropZone">
+                        <div class="upload-area" id="uploadArea">
+                            <div class="upload-icon">📸</div>
+                            <h3>Upload ảnh bài học</h3>
+                            <p>Kéo thả ảnh hoặc click để chọn</p>
+                            <p class="text-muted">JPG, PNG — ảnh chụp sách, bảng, đề bài</p>
+                            <input type="file" id="imageInput" accept="image/*" hidden>
+                        </div>
+                        <img id="previewImg" class="preview-img hidden" alt="Preview">
+                    </div>
+
+                    <!-- Text Input -->
+                    <div class="card text-card">
+                        <h3>📝 Hoặc nhập text bài học</h3>
+                        <textarea id="textInput" placeholder="Nhập nội dung bài học, công thức, hoặc mô tả..."
+                            rows="10"></textarea>
+                        <div class="input-row">
+                            <select id="subjectSelect" class="select-input">
+                                <option value="math">📐 Toán học</option>
+                                <option value="science">🔬 Khoa học</option>
+                                <option value="language">📖 Ngôn ngữ</option>
+                                <option value="skill">💡 Kỹ năng</option>
+                                <option value="general">📚 Chung</option>
+                            </select>
+                            <button class="btn btn-primary btn-lg" id="btnAnalyze" onclick="analyzeInput()">
+                                🤖 AI Phân Tích
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Status -->
+                <div id="analyzeStatus" class="status-bar hidden">
+                    <div class="spinner"></div>
+                    <span id="analyzeMsg">Đang phân tích...</span>
+                </div>
+            </section>
+
+            <!-- SCRIPT TAB -->
+            <section class="tab-panel" id="panel-script">
+                <div class="script-header">
+                    <h2 id="scriptTitle">Chưa có kịch bản</h2>
+                    <div class="script-actions">
+                        <button class="btn" onclick="regenerateScript()">🔄 Tạo lại</button>
+                        <button class="btn btn-primary" id="btnGenAudio" onclick="generateAudio()">
+                            🎵 Tạo Voice
+                        </button>
+                    </div>
+                </div>
+                <div id="stepsContainer" class="steps-list">
+                    <div class="empty-state">
+                        <span class="empty-icon">📋</span>
+                        <p>Upload ảnh hoặc nhập text ở tab Input để bắt đầu</p>
+                    </div>
+                </div>
+
+                <!-- Audio Status -->
+                <div id="audioStatus" class="status-bar hidden">
+                    <div class="spinner"></div>
+                    <span id="audioMsg">Đang tạo voice...</span>
+                    <div class="progress-bar"><div class="progress-fill" id="audioProgress"></div></div>
+                </div>
+            </section>
+
+            <!-- PREVIEW TAB -->
+            <section class="tab-panel" id="panel-preview">
+                <div class="preview-container">
+                    <div class="phone-frame">
+                        <canvas id="previewCanvas" width="1080" height="1920"></canvas>
+                    </div>
+                    <div class="preview-controls">
+                        <button class="btn" id="btnPlay" onclick="togglePreview()">▶️ Play</button>
+                        <input type="range" id="seekBar" min="0" max="100" value="0" class="seek-bar">
+                        <span id="timeDisplay">0:00 / 0:00</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- EXPORT TAB -->
+            <section class="tab-panel" id="panel-export">
+                <div class="export-container">
+                    <div class="card export-card">
+                        <h2>📤 Export Video</h2>
+                        <p>Render video MP4 (1080×1920, 9:16) với animation và voice đồng bộ</p>
+
+                        <div class="export-settings">
+                            <div class="setting-row">
+                                <label>Theme:</label>
+                                <span id="exportTheme" class="setting-value">Dark</span>
+                            </div>
+                            <div class="setting-row">
+                                <label>Voice:</label>
+                                <span id="exportVoice" class="setting-value">—</span>
+                            </div>
+                            <div class="setting-row">
+                                <label>Steps:</label>
+                                <span id="exportSteps" class="setting-value">0</span>
+                            </div>
+                            <div class="setting-row">
+                                <label>Render:</label>
+                                <select id="renderMode" class="select-input" style="width:auto;min-width:180px">
+                                    <option value="pipe">⚡ Pipe (nhanh, 1 bước)</option>
+                                    <option value="frames">🖼️ Frames (ổn định)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary btn-xl" id="btnRender" onclick="renderVideo()">
+                            🎬 Render Video
+                        </button>
+
+                        <!-- Render Status -->
+                        <div id="renderStatus" class="status-bar hidden">
+                            <div class="spinner"></div>
+                            <span id="renderMsg">Rendering...</span>
+                            <div class="progress-bar"><div class="progress-fill" id="renderProgress"></div></div>
+                        </div>
+
+                        <!-- Download Link -->
+                        <div id="downloadArea" class="download-area hidden">
+                            <a id="downloadLink" class="btn btn-success btn-xl" href="#" target="_blank">
+                                ⬇️ Download Video
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/edu-video-studio-static/edu_studio.js"></script>
+</body>
+</html>

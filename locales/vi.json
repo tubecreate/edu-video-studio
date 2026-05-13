@@ -1,0 +1,18 @@
+{
+    "edu.title": "EduVideo Studio",
+    "edu.subtitle": "Tạo video dạy học step-by-step với AI",
+    "edu.tab_input": "Input",
+    "edu.tab_script": "Script",
+    "edu.tab_preview": "Preview",
+    "edu.tab_export": "Export",
+    "edu.upload_title": "Upload ảnh bài học",
+    "edu.upload_desc": "Kéo thả ảnh hoặc click để chọn",
+    "edu.text_title": "Hoặc nhập text bài học",
+    "edu.btn_analyze": "AI Phân Tích",
+    "edu.btn_gen_audio": "Tạo Voice",
+    "edu.btn_render": "Render Video",
+    "edu.btn_download": "Download Video",
+    "edu.theme_dark": "Dark",
+    "edu.theme_whiteboard": "Whiteboard",
+    "edu.theme_chalkboard": "Chalkboard"
+}
