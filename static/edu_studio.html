@@ -7,17 +7,20 @@
     <meta name="description" content="Tạo video dạy học step-by-step với AI">
     <link rel="stylesheet" href="/edu-video-studio-static/edu_studio.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     <script src="/static/i18n.js"></script>
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
+        <!-- Topbar -->
         <header class="app-header">
             <div class="header-left">
                 <span class="header-icon">🎓</span>
                 <div>
-                    <h1>EduVideo Studio</h1>
-                    <p class="header-subtitle">Tạo video dạy học step-by-step với AI</p>
+                    <h1 class="header-title">EduVideo Studio</h1>
+                    <span class="header-subtitle">Tạo video dạy học step-by-step với AI</span>
                 </div>
             </div>
             <div class="header-actions">
@@ -25,12 +28,12 @@
                     <span class="ai-dot" id="aiStatusDot"></span>
                     <span id="aiStatusText">Đang tải...</span>
                 </div>
-                <select id="themeSelect" class="select-input">
+                <select id="themeSelect" class="select-input" onchange="updateTheme()">
                     <option value="dark">🌙 Dark</option>
                     <option value="whiteboard">📋 Whiteboard</option>
                     <option value="chalkboard">🏫 Chalkboard</option>
                 </select>
-                <select id="voiceSelect" class="select-input">
+                <select id="voiceSelect" class="select-input" onchange="updateVoice()">
                     <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
                     <option value="vi-VN-NamMinhNeural">🇻🇳 Nam Minh (Nam)</option>
                     <option value="en-US-AriaNeural">🇺🇸 Aria (EN)</option>
@@ -39,197 +42,378 @@
             </div>
         </header>
 
-        <!-- Tabs -->
-        <nav class="tabs">
-            <button class="tab active" data-tab="input">📥 Input</button>
-            <button class="tab" data-tab="raw">📋 Raw Content</button>
-            <button class="tab" data-tab="script">📝 Script</button>
-            <button class="tab" data-tab="preview">🎬 Preview</button>
-            <button class="tab" data-tab="export">📤 Export</button>
-        </nav>
+        <!-- Studio Body (3 columns) -->
+        <div class="studio-body">
+            
+            <!-- Left Sidebar (Projects) -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-head">
+                    <span class="sidebar-label">PROJECTS</span>
+                    <button class="btn-icon" onclick="showCreateProject()" title="Tạo project mới">➕</button>
+                </div>
+                <div class="sidebar-list" id="sidebarList">
+                    <!-- Populated by JS -->
+                </div>
+                <div class="sidebar-bottom">
+                    <button class="btn btn-primary sidebar-add-lesson" onclick="showCreateProject()" style="width:100%; justify-content:center;">
+                        ➕ Bài Toán Mới
+                    </button>
+                </div>
+            </aside>
 
-        <!-- Tab Panels -->
-        <main class="main-content">
-            <!-- INPUT TAB -->
-            <section class="tab-panel active" id="panel-input">
-                <div class="input-grid">
-                    <!-- Image Upload -->
-                    <div class="card upload-card" id="dropZone">
-                        <div class="upload-area" id="uploadArea">
-                            <div class="upload-icon">📸</div>
-                            <h3>Upload ảnh bài học</h3>
-                            <p>Kéo thả ảnh hoặc click để chọn</p>
-                            <p class="text-muted">JPG, PNG — ảnh chụp sách, bảng, đề bài</p>
-                            <input type="file" id="imageInput" accept="image/*" hidden>
-                        </div>
-                        <img id="previewImg" class="preview-img hidden" alt="Preview">
-                    </div>
-
-                    <!-- Text Input -->
-                    <div class="card text-card">
-                        <h3>📝 Hoặc nhập text bài học</h3>
-                        <textarea id="textInput" placeholder="Nhập nội dung bài học, công thức, hoặc mô tả..."
-                            rows="10"></textarea>
-                        <div class="input-row">
-                            <select id="subjectSelect" class="select-input">
-                                <option value="auto" selected>✨ Tự động nhận diện (AI)</option>
-                                <optgroup label="📐 Dạng Toán">
-                                    <option value="dat_tinh">🔢 Đặt tính rồi tính</option>
-                                    <option value="dien_cho_trong">❓ Điền vào chỗ trống</option>
-                                    <option value="phan_tich_so">🔣 Phân tích / Giá trị số</option>
-                                    <option value="tia_so">📏 Tia số / Dãy số</option>
-                                    <option value="hinh_hoc">📐 Hình học / Đo lường</option>
-                                    <option value="word_problem">📖 Bài toán lời văn</option>
-                                </optgroup>
-                                <optgroup label="📚 Môn học khác">
-                                    <option value="science">🔬 Khoa học</option>
-                                    <option value="language">📖 Tiếng Việt / Ngôn ngữ</option>
-                                    <option value="skill">💡 Kỹ năng</option>
-                                    <option value="general">📚 Chung</option>
-                                </optgroup>
-                            </select>
-                            <select id="langSelect" class="select-input" style="width: auto;">
-                                <option value="vi">🇻🇳 Tiếng Việt</option>
-                                <option value="en">🇺🇸 English</option>
-                            </select>
-                            <button class="btn" id="btnAISettings" onclick="openAISettingsModal()" title="Cài đặt AI">
-                                ⚙️ Cài đặt AI
-                            </button>
-                            <button class="btn btn-primary btn-lg" id="btnAnalyze" onclick="analyzeInput()">
-                                🤖 AI Phân Tích
-                            </button>
-                        </div>
-                    </div>
+            <!-- Main Workspace -->
+            <main class="main-panel" id="mainPanel">
+                <!-- Welcome state -->
+                <div class="welcome-state" id="welcomeState">
+                    <div class="welcome-icon">🎓</div>
+                    <h2 class="welcome-title">EduVideo Studio</h2>
+                    <p class="welcome-desc">Nền tảng tạo video giảng dạy tự động bằng AI. Hỗ trợ giải toán, lý, hóa step-by-step.</p>
+                    <button class="btn btn-primary btn-xl" onclick="showCreateProject()">
+                        ➕ Tạo Bài Toán Mới
+                    </button>
                 </div>
 
-                <!-- Status -->
-                <div id="analyzeStatus" class="status-bar hidden">
-                    <div class="spinner"></div>
-                    <span id="analyzeMsg">Đang phân tích...</span>
-                </div>
-            </section>
+                <!-- Editor state -->
+                <div class="editor-state" id="editorState" style="display:none">
+                    
+                    <!-- Tabs Nav -->
+                    <nav class="tabs">
+                        <button class="tab active" data-tab="raw">📋 Raw Content</button>
+                        <button class="tab" data-tab="script">📝 Script</button>
+                        <button class="tab" data-tab="preview">🎬 Preview</button>
+                        <button class="tab" data-tab="export">📤 Export</button>
+                    </nav>
 
-            <!-- RAW CONTENT TAB -->
-            <section class="tab-panel" id="panel-raw">
-                <div class="raw-header">
-                    <h2>📋 Raw Content — Kết quả phân tích thô</h2>
-                    <div class="raw-actions">
-                        <span class="raw-badge" id="rawBadge">Chưa có dữ liệu</span>
-                        <button class="btn" onclick="copyRawContent()" title="Copy nội dung">📋 Copy</button>
-                        <button class="btn" onclick="document.querySelector('[data-tab=script]').click()" title="Xem kịch bản JSON">📝 Xem Script →</button>
-                    </div>
-                </div>
-                <div class="raw-content-area">
-                    <div class="raw-stage" id="rawStage1">
-                        <div class="raw-stage-header">
-                            <span class="raw-stage-icon">👁️</span>
-                            <span class="raw-stage-title">Giai đoạn 1: Vision AI — Phân tích bài toán & hướng giải</span>
-                            <span class="raw-stage-status" id="rawStage1Status">⏳ Chờ...</span>
-                        </div>
-                        <pre class="raw-output" id="rawStage1Output">Chưa có dữ liệu. Nhấn "AI Phân Tích" ở tab Input để bắt đầu.</pre>
-                    </div>
-                    <div class="raw-stage" id="rawStage2">
-                        <div class="raw-stage-header">
-                            <span class="raw-stage-icon">🧠</span>
-                            <span class="raw-stage-title">Giai đoạn 2: Script AI — Viết kịch bản JSON</span>
-                            <span class="raw-stage-status" id="rawStage2Status">⏳ Chờ...</span>
-                        </div>
-                        <pre class="raw-output" id="rawStage2Output">Chờ giai đoạn 1 hoàn thành...</pre>
-                    </div>
-                </div>
-            </section>
-
-            <!-- SCRIPT TAB -->
-            <section class="tab-panel" id="panel-script">
-                <div class="script-header">
-                    <h2 id="scriptTitle">Chưa có kịch bản</h2>
-                    <div class="script-actions">
-                        <button class="btn" onclick="regenerateScript()">🔄 Tạo lại</button>
-                        <button class="btn btn-primary" id="btnGenAudio" onclick="generateAudio()">
-                            🎵 Tạo Voice
-                        </button>
-                    </div>
-                </div>
-                <div id="stepsContainer" class="steps-list">
-                    <div class="empty-state">
-                        <span class="empty-icon">📋</span>
-                        <p>Upload ảnh hoặc nhập text ở tab Input để bắt đầu</p>
-                    </div>
-                </div>
-
-                <!-- Audio Status -->
-                <div id="audioStatus" class="status-bar hidden">
-                    <div class="spinner"></div>
-                    <span id="audioMsg">Đang tạo voice...</span>
-                    <div class="progress-bar"><div class="progress-fill" id="audioProgress"></div></div>
-                </div>
-            </section>
-
-            <!-- PREVIEW TAB -->
-            <section class="tab-panel" id="panel-preview">
-                <div class="preview-container">
-                    <div class="phone-frame">
-                        <canvas id="previewCanvas" width="1080" height="1920"></canvas>
-                    </div>
-                    <div class="preview-controls">
-                        <button class="btn" id="btnPlay" onclick="togglePreview()">▶️ Play</button>
-                        <input type="range" id="seekBar" min="0" max="100" value="0" class="seek-bar">
-                        <span id="timeDisplay">0:00 / 0:00</span>
-                    </div>
-                </div>
-            </section>
-
-            <!-- EXPORT TAB -->
-            <section class="tab-panel" id="panel-export">
-                <div class="export-container">
-                    <div class="card export-card">
-                        <h2>📤 Export Video</h2>
-                        <p>Render video MP4 (1080×1920, 9:16) với animation và voice đồng bộ</p>
-
-                        <div class="export-settings">
-                            <div class="setting-row">
-                                <label>Theme:</label>
-                                <span id="exportTheme" class="setting-value">Dark</span>
+                    <!-- TAB: Raw Content (Vision AI output only) -->
+                    <section class="tab-panel active" id="panel-raw">
+                        <div class="stream-panel">
+                            <div class="stream-header">
+                                <div class="stream-status-dot" id="streamDot"></div>
+                                <h3 id="streamTitle">👁️ Nội dung phân tích (Vision AI)</h3>
+                                <span class="stream-stage-badge" id="streamStageBadge">--</span>
                             </div>
-                            <div class="setting-row">
-                                <label>Voice:</label>
-                                <span id="exportVoice" class="setting-value">—</span>
+                            <div class="stream-output" id="streamOutput" style="min-height:200px;">
+                                <div style="text-align:center;padding:60px 20px;color:var(--text-3);font-size:13px;">Chưa có dữ liệu. Bấm <strong>▶️ Phân tích</strong> hoặc chạy Autopilot.</div>
                             </div>
-                            <div class="setting-row">
-                                <label>Steps:</label>
-                                <span id="exportSteps" class="setting-value">0</span>
-                            </div>
-                            <div class="setting-row">
-                                <label>Render:</label>
-                                <select id="renderMode" class="select-input" style="width:auto;min-width:180px">
-                                    <option value="pipe">⚡ Pipe (nhanh, 1 bước)</option>
-                                    <option value="frames">🖼️ Frames (ổn định)</option>
-                                </select>
+                            <div class="stream-footer" style="display:flex; justify-content:space-between; align-items:center;">
+                                <span id="streamStats" class="stream-stats"></span>
+                                <div style="display:flex;gap:6px;">
+                                    <button class="btn" onclick="manualAnalyze()" id="btnManualAnalyze" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;">▶️ Phân tích</button>
+                                    <button class="btn" onclick="copyRawContent()" style="background:var(--bg-1);color:var(--text-1);border:1px solid var(--border-color);border-radius:4px;padding:4px 8px;font-size:12px;">📋 Copy</button>
+                                </div>
                             </div>
                         </div>
+                        
+                        <!-- Hidden storage for raw results -->
+                        <div style="display:none;">
+                            <pre class="raw-content" id="rawStage1Output">Chưa có dữ liệu.</pre>
+                            <pre class="raw-content" id="rawStage2Output"></pre>
+                        </div>
+                    </section>
 
-                        <button class="btn btn-primary btn-xl" id="btnRender" onclick="renderVideo()">
-                            🎬 Render Video
-                        </button>
-
-                        <!-- Render Status -->
-                        <div id="renderStatus" class="status-bar hidden">
+                    <!-- TAB: Script -->
+                    <section class="tab-panel" id="panel-script">
+                        <div class="script-header">
+                            <h2 id="scriptTitle">Kịch bản chi tiết</h2>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <!-- Card / JSON toggle -->
+                                <div style="display:flex;background:var(--bg-1);border-radius:8px;border:1px solid var(--border);overflow:hidden">
+                                    <button id="scriptViewCard" class="btn-view-toggle active" onclick="setScriptView('card')" title="Card view">📝 Card</button>
+                                    <button id="scriptViewJson" class="btn-view-toggle" onclick="setScriptView('json')" title="JSON view">{} JSON</button>
+                                </div>
+                                <button class="btn" onclick="regenerateScript()">🔄 Tạo lại Script</button>
+                                <button class="btn btn-primary" id="btnGenAudio" onclick="generateAudio()">🎵 Tạo Voice Timing</button>
+                            </div>
+                        </div>
+                        <div id="stepsContainer" class="steps-list">
+                            <div class="empty-state">
+                                <span style="font-size:48px; opacity:0.5;">📋</span>
+                                <p class="text-muted" style="margin-top:10px;">Chưa có kịch bản.</p>
+                            </div>
+                        </div>
+                        <!-- Audio Status -->
+                        <div id="audioStatus" class="status-bar hidden">
                             <div class="spinner"></div>
-                            <span id="renderMsg">Rendering...</span>
-                            <div class="progress-bar"><div class="progress-fill" id="renderProgress"></div></div>
+                            <span id="audioMsg">Đang tạo voice...</span>
+                            <div class="progress-bar"><div class="progress-fill" id="audioProgress"></div></div>
                         </div>
+                    </section>
 
-                        <!-- Download Link -->
-                        <div id="downloadArea" class="download-area hidden">
-                            <a id="downloadLink" class="btn btn-success btn-xl" href="#" target="_blank">
-                                ⬇️ Download Video
-                            </a>
+                    <!-- MODAL: Step Edit Dialog -->
+                    <div id="stepEditModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;" onclick="if(event.target===this)closeStepEdit()">
+                        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:16px;width:min(660px,96vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
+                            <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                                <h3 style="margin:0;font-size:15px;">✏️ Chỉnh sửa Step <span id="editStepNum"></span></h3>
+                                <button onclick="closeStepEdit()" style="background:none;border:none;color:var(--text-2);font-size:22px;cursor:pointer;line-height:1;padding:0 4px;">&times;</button>
+                            </div>
+                            <div style="padding:16px 20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;">
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">🎤 Voice Text (giọng đọc)</label>
+                                    <textarea id="editVoiceText" rows="3" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-3);border:1px solid var(--border);border-radius:8px;color:var(--text-1);font-size:13px;resize:vertical;font-family:inherit;line-height:1.5;"></textarea>
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">📦 Elements JSON (canvas elements)</label>
+                                    <textarea id="editElementsJson" rows="14" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;color:#7dd3fc;font-size:12px;resize:vertical;font-family:'Courier New',Consolas,monospace;line-height:1.5;"></textarea>
+                                    <span id="editJsonError" style="font-size:11px;color:#ef4444;margin-top:4px;display:none;"></span>
+                                </div>
+                            </div>
+                            <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
+                                <button class="btn" onclick="closeStepEdit()">Hủy</button>
+                                <button class="btn btn-primary" onclick="saveStepEdit()">💾 Lưu thay đổi</button>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <!-- TAB: Preview -->
+                    <section class="tab-panel" id="panel-preview">
+                        <div class="preview-container">
+                            <div class="phone-frame">
+                                <canvas id="previewCanvas" width="1080" height="1920"></canvas>
+                            </div>
+                            <div class="preview-controls">
+                                <button class="btn btn-primary" id="btnPlay" onclick="togglePreview()">▶️ Play</button>
+                                <input type="range" id="seekBar" min="0" max="100" value="0" class="seek-bar">
+                                <span id="timeDisplay">0:00 / 0:00</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB: Export -->
+                    <section class="tab-panel" id="panel-export">
+                        <div class="card" style="max-width:600px; margin:0 auto; text-align:center; padding:40px;">
+                            <h2 style="color:var(--accent); margin-bottom:12px; font-size:1.5rem;">📤 Export Video</h2>
+                            <p class="text-muted" style="margin-bottom:30px;">Render video MP4 (1080×1920) với animation và voice đồng bộ</p>
+                            
+                            <div style="text-align:left; margin-bottom:30px;">
+                                <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
+                                    <span class="text-muted">Render Mode:</span>
+                                    <select id="renderMode" class="select-input" style="width:200px; padding:6px 10px;">
+                                        <option value="pipe">⚡ Pipe (nhanh)</option>
+                                        <option value="frames">🖼️ Frames (ổn định)</option>
+                                    </select>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
+                                    <span class="text-muted">Encoder:</span>
+                                    <select id="gpuEncoder" class="select-input" style="width:200px; padding:6px 10px;">
+                                        <option value="cpu">🖥️ CPU (libx264)</option>
+                                        <option value="nvenc" selected>🟢 NVIDIA GPU (h264_nvenc)</option>
+                                        <option value="qsv">🔵 Intel QSV (h264_qsv)</option>
+                                        <option value="amf">🔴 AMD AMF (h264_amf)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <button class="btn btn-primary btn-xl" id="btnRender" onclick="renderVideo()">🎬 Render Video</button>
+                            
+                            <div id="renderStatus" class="status-bar hidden" style="margin-top:20px;text-align:left;">
+                                <div class="spinner"></div>
+                                <span id="renderMsg">Rendering...</span>
+                                <div class="progress-bar"><div class="progress-fill" id="renderProgress"></div></div>
+                            </div>
+                            
+                            <div id="downloadArea" class="hidden" style="margin-top:20px;">
+                                <a id="downloadLink" class="btn btn-success btn-xl" href="#" target="_blank">⬇️ Download Video</a>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </main>
+
+            <!-- Right Sidebar (Gallery) -->
+            <aside class="gallery-sidebar" id="galleryPanel">
+                <div class="gallery-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h3>🖼️ Thư viện nguyên liệu</h3>
+                        <p>Icon, hình khối, trang trí</p>
+                    </div>
+                    <button class="btn-icon" onclick="showAddCategoryModal()" title="Thêm danh mục">➕</button>
+                </div>
+                
+                <div style="padding: 10px;">
+                    <select id="galleryCategorySelect" class="select-input" onchange="loadGalleryItems()" style="width:100%;">
+                        <option value="">Tất cả danh mục</option>
+                    </select>
+                </div>
+
+                <div class="gallery-content" id="galleryContent">
+                    <div class="empty-state" style="grid-column: span 2; padding:40px 10px;">
+                        <span style="font-size:32px;opacity:0.3;">🖼️</span>
+                        <p class="text-muted" style="margin-top:10px;font-size:11px;">Chưa có tài nguyên nào.</p>
+                    </div>
+                </div>
+                <div class="gallery-footer">
+                    <input type="file" id="galleryFileInput" hidden accept="image/*, .svg">
+                    <button class="btn btn-primary" onclick="document.getElementById('galleryFileInput').click()" style="width:100%; justify-content:center;">⬆️ Upload Asset</button>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <!-- Gallery Category Modal -->
+    <div id="categoryModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2>➕ Thêm danh mục mới</h2>
+                <button class="close-btn" onclick="closeModal('categoryModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Tên danh mục</label>
+                    <input type="text" id="catName" class="input" placeholder="VD: Icons">
+                </div>
+                <div class="form-group">
+                    <label>Icon hiển thị (Emoji)</label>
+                    <input type="text" id="catIcon" class="input" placeholder="VD: 🌟" value="📁">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('categoryModal')">Hủy</button>
+                <button class="btn btn-primary" onclick="submitCreateCategory()">Tạo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!--  NEW PROJECT WIZARD MODAL (3 Steps)                    -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="projectModal" class="modal hidden">
+        <div class="modal-content wizard-modal">
+            <!-- Step Indicator -->
+            <div class="wizard-steps">
+                <div class="wizard-step-item active" id="wStep1"><span class="wstep-num">1</span> Nhập liệu</div>
+                <div class="wizard-divider">›</div>
+                <div class="wizard-step-item" id="wStep2"><span class="wstep-num">2</span> AI Phân tích</div>
+                <div class="wizard-divider">›</div>
+                <div class="wizard-step-item" id="wStep3"><span class="wstep-num">3</span> Xác nhận</div>
+                <button class="close-btn" onclick="closeModal('projectModal')" style="margin-left:auto">✕</button>
+            </div>
+
+            <!-- ── STEP 1: Input ──────────────────────────────── -->
+            <div id="wizardStep1" class="wizard-pane active">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>📌 Tên project</label>
+                        <input type="text" id="projTitle" class="input" placeholder="VD: Toán lớp 4 - Đặt tính cộng trừ">
+                    </div>
+
+                    <div class="form-group">
+                        <label>📥 Nội dung đề bài</label>
+                        <div id="wizardDropZone" class="wizard-drop-zone" onclick="document.getElementById('wizardImageInput').click()">
+                            <div id="wizardDropContent">
+                                <div style="font-size:2rem;margin-bottom:8px">📸</div>
+                                <div style="font-weight:600">Kéo thả ảnh / PDF vào đây</div>
+                                <div class="text-muted" style="font-size:12px;margin-top:4px">hoặc click để chọn file</div>
+                            </div>
+                            <input type="file" id="wizardImageInput" accept="image/*,application/pdf" hidden>
+                        </div>
+                        <div style="text-align:center;margin:10px 0;color:var(--text-3);font-size:12px">— HOẶC —</div>
+                        <textarea id="wizardTextInput" class="input" rows="4" placeholder="Nhập nội dung đề bài bằng text..."></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>🎬 Chế độ video</label>
+                        <div class="radio-group" style="display:flex;gap:10px">
+                            <label class="video-mode-card" id="vmCardMulti" style="border-color:var(--accent)">
+                                <input type="radio" name="videoMode" value="multi" checked onchange="selectVideoMode('multi')">
+                                <div style="font-size:1.5rem;margin-bottom:6px">📚</div>
+                                <strong>N video riêng</strong>
+                                <div class="text-muted" style="font-size:11px">Mỗi câu/bài = 1 file MP4 độc lập</div>
+                            </label>
+                            <label class="video-mode-card" id="vmCardSingle">
+                                <input type="radio" name="videoMode" value="single" onchange="selectVideoMode('single')">
+                                <div style="font-size:1.5rem;margin-bottom:6px">🎬</div>
+                                <strong>1 video chung</strong>
+                                <div class="text-muted" style="font-size:11px">AI viết 1 kịch bản chung cho tất cả → 1 MP4</div>
+                            </label>
                         </div>
                     </div>
                 </div>
-            </section>
-        </main>
+                <div class="modal-footer">
+                    <button class="btn" onclick="closeModal('projectModal')">Hủy</button>
+                    <button class="btn btn-primary" onclick="wizardGoScan()">AI Phân tích →</button>
+                </div>
+            </div>
+
+            <!-- ── STEP 2: AI Scan ────────────────────────────── -->
+            <div id="wizardStep2" class="wizard-pane hidden">
+                <div class="modal-body">
+                    <div id="wizardScanLoading" style="text-align:center;padding:40px 20px">
+                        <div class="spinner" style="margin:0 auto 16px;width:32px;height:32px"></div>
+                        <div style="font-weight:600;font-size:1rem">🤖 AI đang đọc và đếm số bài...</div>
+                        <div class="text-muted" style="font-size:13px;margin-top:8px">Vision AI đang phân tích nội dung đề bài</div>
+                    </div>
+                    <div id="wizardScanResult" class="hidden">
+                        <div class="wizard-scan-summary" id="wizardScanSummary"></div>
+                        <div style="margin:16px 0 8px;font-weight:600;font-size:0.9rem">📋 Danh sách bài sẽ tạo:</div>
+                        <div id="wizardLessonList" class="wizard-lesson-list"></div>
+                        <div style="margin-top:12px;font-size:12px;color:var(--text-3)">
+                            💡 Bấm vào tên để sửa. Dùng ➕ để thêm bài, ✕ để xoá.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="wizardGoBack()">← Quay lại</button>
+                    <button class="btn btn-primary" id="wizardConfirmBtn" onclick="wizardGoConfirm()" disabled>Xác nhận →</button>
+                </div>
+            </div>
+
+            <!-- ── STEP 3: Confirm & Run ──────────────────────── -->
+            <div id="wizardStep3" class="wizard-pane hidden">
+                <div class="modal-body">
+                    <div class="wizard-confirm-box">
+                        <div style="font-size:2.5rem;margin-bottom:12px">🚀</div>
+                        <h3 id="wizardConfirmTitle" style="color:var(--accent);margin-bottom:8px"></h3>
+                        <div id="wizardConfirmSummary" class="text-muted" style="font-size:14px;margin-bottom:16px"></div>
+                        <div id="wizardConfirmList" style="text-align:left;margin-bottom:16px"></div>
+                        <div style="margin-bottom:16px">
+                            <div style="font-weight:600;margin-bottom:8px">🎞️ Render Mode:</div>
+                            <div style="display:flex;gap:8px">
+                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRenderMode" value="pipe" checked>
+                                    <div><strong>⚡ Pipe</strong> <span class="text-muted" style="font-size:11px">(nhanh)</span></div>
+                                </label>
+                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRenderMode" value="frames">
+                                    <div><strong>🖼️ Frames</strong> <span class="text-muted" style="font-size:11px">(ổn định)</span></div>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="wizard-run-mode">
+                            <div style="font-weight:600;margin-bottom:10px">⚙️ Chế độ chạy:</div>
+                            <div style="display:flex;flex-direction:column;gap:8px">
+                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:var(--bg-3);padding:12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRunMode" value="manual" style="margin-top:3px">
+                                    <div>
+                                        <strong>🖐️ Manual</strong>
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tạo project & lesson, tôi sẽ tự chạy từng bài</div>
+                                    </div>
+                                </label>
+                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:rgba(255,215,0,0.05);padding:12px;border-radius:8px;border:1px solid rgba(255,215,0,0.3)">
+                                    <input type="radio" name="wizardRunMode" value="autopilot" checked style="margin-top:3px">
+                                    <div>
+                                        <strong style="color:var(--accent)">🤖 Full Autopilot</strong>
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tự động chạy theo tab: Raw Content → Script → Render cho TẤT CẢ bài</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="wizardGoScanStep()">← Quay lại</button>
+                    <button class="btn btn-primary" id="wizardRunBtn" onclick="wizardRun()" style="background:linear-gradient(135deg,#FFD700,#FDB931);color:#000">▶️ Tạo và Chạy Tự động</button>
+                </div>
+            </div>
+        </div>
     </div>
+
+
+
 
     <!-- AI Settings Modal -->
     <div id="aiSettingsModal" class="modal hidden">
@@ -238,77 +422,30 @@
                 <h2>⚙️ Cài đặt AI</h2>
                 <button class="close-btn" onclick="closeAISettingsModal()">✕</button>
             </div>
-            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
-                <!-- VISION AI SETTINGS -->
-                <h3 style="margin-top:0; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px; color:#FFD700;">👁️ Giai đoạn 1: Vision AI (Phân tích ảnh)</h3>
+            <div class="modal-body" style="max-height: 60vh;">
+                <!-- VISION AI -->
+                <h3 style="font-size:13px; color:var(--accent); margin-bottom:10px;">👁️ Vision AI (Phân tích)</h3>
                 <div class="form-group">
-                    <label>Nguồn AI</label>
                     <div class="radio-group">
-                        <label><input type="radio" name="visionSource" value="cloud" checked onclick="toggleAISource('vision')"> Hệ thống TubeCLI (Cloud)</label>
-                        <label><input type="radio" name="visionSource" value="custom" onclick="toggleAISource('vision')"> Custom Local API</label>
+                        <label><input type="radio" name="visionSource" value="cloud" checked onclick="toggleAISource('vision')"> Hệ thống (Cloud)</label>
+                        <label><input type="radio" name="visionSource" value="custom" onclick="toggleAISource('vision')"> Custom API</label>
                     </div>
                 </div>
-
                 <div id="visionCloudAiSettings" class="settings-section">
-                    <div class="form-group">
-                        <label>Provider</label>
-                        <select id="visionCloudProvider" class="input" onchange="loadCloudModels('vision')"></select>
-                    </div>
-                    <div class="form-group">
-                        <label>Model</label>
-                        <select id="visionCloudModel" class="input"></select>
-                    </div>
+                    <div class="form-group"><label>Provider</label><select id="visionCloudProvider" class="select-input" onchange="loadCloudModels('vision')"></select></div>
+                    <div class="form-group"><label>Model</label><select id="visionCloudModel" class="select-input"></select></div>
                 </div>
-
-                <div id="visionCustomAiSettings" class="settings-section hidden">
-                    <div class="form-group">
-                        <label>Base URL (OpenAI Format)</label>
-                        <input type="text" id="visionCustomBaseUrl" class="input" placeholder="http://localhost:20128/v1/chat/completions">
-                    </div>
-                    <div class="form-group">
-                        <label>API Key</label>
-                        <input type="password" id="visionCustomApiKey" class="input" placeholder="sk-...">
-                    </div>
-                    <div class="form-group">
-                        <label>Model Name</label>
-                        <input type="text" id="visionCustomModel" class="input" placeholder="cx/gpt-5.4">
-                    </div>
-                </div>
-
-                <!-- SCRIPT AI SETTINGS -->
-                <h3 style="margin-top:30px; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px; color:#22D3EE;">🧠 Giai đoạn 2: Script AI (Viết kịch bản)</h3>
+                <!-- SCRIPT AI -->
+                <h3 style="font-size:13px; color:var(--cyan); margin-top:24px; margin-bottom:10px;">🧠 Script AI (Viết kịch bản)</h3>
                 <div class="form-group">
-                    <label>Nguồn AI</label>
                     <div class="radio-group">
-                        <label><input type="radio" name="scriptSource" value="cloud" checked onclick="toggleAISource('script')"> Hệ thống TubeCLI (Cloud)</label>
-                        <label><input type="radio" name="scriptSource" value="custom" onclick="toggleAISource('script')"> Custom Local API</label>
+                        <label><input type="radio" name="scriptSource" value="cloud" checked onclick="toggleAISource('script')"> Hệ thống (Cloud)</label>
+                        <label><input type="radio" name="scriptSource" value="custom" onclick="toggleAISource('script')"> Custom API</label>
                     </div>
                 </div>
-
                 <div id="scriptCloudAiSettings" class="settings-section">
-                    <div class="form-group">
-                        <label>Provider</label>
-                        <select id="scriptCloudProvider" class="input" onchange="loadCloudModels('script')"></select>
-                    </div>
-                    <div class="form-group">
-                        <label>Model</label>
-                        <select id="scriptCloudModel" class="input"></select>
-                    </div>
-                </div>
-
-                <div id="scriptCustomAiSettings" class="settings-section hidden">
-                    <div class="form-group">
-                        <label>Base URL (OpenAI Format)</label>
-                        <input type="text" id="scriptCustomBaseUrl" class="input" placeholder="http://localhost:20128/v1/chat/completions">
-                    </div>
-                    <div class="form-group">
-                        <label>API Key</label>
-                        <input type="password" id="scriptCustomApiKey" class="input" placeholder="sk-...">
-                    </div>
-                    <div class="form-group">
-                        <label>Model Name</label>
-                        <input type="text" id="scriptCustomModel" class="input" placeholder="cx/gpt-5.4">
-                    </div>
+                    <div class="form-group"><label>Provider</label><select id="scriptCloudProvider" class="select-input" onchange="loadCloudModels('script')"></select></div>
+                    <div class="form-group"><label>Model</label><select id="scriptCloudModel" class="select-input"></select></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -317,6 +454,11 @@
             </div>
         </div>
     </div>
+
+    <!-- Floating Stop Autopilot Button (like Pod Studio) -->
+    <button id="floatStopBtn" class="btn btn-danger" style="display:none; position:fixed; bottom:30px; right:30px; z-index:9999; box-shadow:0 8px 30px rgba(0,0,0,0.5); padding:15px 25px; border-radius:30px; font-weight:600; font-size:14px;" onclick="stopAutopilot()">
+        ⏹ STOP AUTO-PILOT
+    </button>
 
     <script src="/edu-video-studio-static/edu_studio.js"></script>
 </body>

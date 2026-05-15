@@ -577,6 +577,11 @@ function renderUnifiedElements(unifiedEls, startY) {
                 j++;
             }
 
+            // Skip rendering if the box is completely empty (happens when AI duplicates box elements)
+            if (inner.length === 0) {
+                continue;
+            }
+
             let innerH = 0;
             for (const iu of inner) innerH += measureTextHeight(iu.el) + 6;
 
@@ -651,14 +656,152 @@ function renderFrame(currentTime) {
 
     const { nonGeoEls, geoEls } = buildUnifiedLayout(currentTime, renderFrom, steps, tSteps);
 
-    cursorY = renderUnifiedElements(nonGeoEls, cursorY);
-    
     if (geoEls.length > 0) {
-        cursorY += renderGeometryZone(geoEls.map(g => g.el), cursorY);
+        // ── Split layout: text in top portion, geo in fixed bottom zone ──
+        const GEO_ZONE_START = Math.round(H * 0.52); // always at 52% of canvas height
+        const GEO_ZONE_H     = H - GEO_ZONE_START - 80; // remaining space minus progress bar
+
+        // Clip text rendering to top zone only
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, W, GEO_ZONE_START - 10);
+        ctx.clip();
+        renderUnifiedElements(nonGeoEls, cursorY);
+        ctx.restore();
+
+        // Draw separator line
+        ctx.save();
+        ctx.strokeStyle = T.geoBorder || '#3a3a5a';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.moveTo(MX, GEO_ZONE_START - 5);
+        ctx.lineTo(W - MX, GEO_ZONE_START - 5);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        renderGeometryZone(geoEls, GEO_ZONE_START, GEO_ZONE_H);
+    } else {
+        renderUnifiedElements(nonGeoEls, cursorY);
     }
 
     drawHighlights(currentTime);
     drawProgress(currentTime, totalDur);
+}
+
+function renderGeometryZone(geoElsObj, startY, zoneH) {
+    if (geoElsObj.length === 0) return 0;
+    zoneH = zoneH || 400;
+    
+    // geoElsObj is array of {el, rawP}
+    const pad = 40;
+    const boxW = W - MX * 2;
+    
+    ctx.save();
+    // Draw zone background
+    roundRect(MX, startY, boxW, zoneH, 16);
+    ctx.fillStyle = T.geoBg || '#1a1a2e'; 
+    ctx.fill();
+    ctx.strokeStyle = T.geoBorder || '#3a3a5a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Mapping normalized (0.0 - 1.0) coords to zone coords
+    // Use the inner area with padding
+    const innerW = boxW - pad * 2;
+    const innerH = zoneH - pad * 2;
+    const mapX = (x) => MX + pad + x * innerW;
+    const mapY = (y) => startY + pad + y * innerH;
+
+    // Build point lookup
+    const pts = {};
+    for (const g of geoElsObj) {
+        if (g.el.type === 'point') {
+            pts[g.el.id] = { x: mapX(g.el.x), y: mapY(g.el.y), el: g.el, rawP: g.rawP };
+        }
+    }
+
+    // 1. Draw segments
+    for (const g of geoElsObj) {
+        if (g.el.type === 'segment') {
+            const p1 = pts[g.el.from], p2 = pts[g.el.to];
+            if (p1 && p2) {
+                ctx.globalAlpha = easeOut(Math.min(g.rawP * 2, 1));
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.strokeStyle = g.el.color === 'highlight' ? T.highlight
+                                : g.el.color === 'red'       ? '#ef4444'
+                                : g.el.color === 'green'     ? '#22c55e'
+                                : (g.el.color || '#ffffff');
+                ctx.lineWidth = 5;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            }
+        }
+    }
+
+    // 2. Draw right angles
+    for (const g of geoElsObj) {
+        if (g.el.type === 'right_angle') {
+            const v = pts[g.el.vertex], p1 = pts[g.el.from], p2 = pts[g.el.to];
+            if (v && p1 && p2) {
+                ctx.globalAlpha = easeOut(Math.min(g.rawP * 2, 1));
+                // Unit vectors
+                const dx1 = p1.x - v.x, dy1 = p1.y - v.y;
+                const len1 = Math.hypot(dx1, dy1);
+                const u1x = dx1 / len1, u1y = dy1 / len1;
+                
+                const dx2 = p2.x - v.x, dy2 = p2.y - v.y;
+                const len2 = Math.hypot(dx2, dy2);
+                const u2x = dx2 / len2, u2y = dy2 / len2;
+
+                const size = Math.min(innerW, innerH) * 0.06; // proportional
+                ctx.beginPath();
+                ctx.moveTo(v.x + u1x * size, v.y + u1y * size);
+                ctx.lineTo(v.x + u1x * size + u2x * size, v.y + u1y * size + u2y * size);
+                ctx.lineTo(v.x + u2x * size, v.y + u2y * size);
+                ctx.strokeStyle = T.highlight || '#eab308';
+                ctx.lineWidth = 4;
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+            }
+        }
+    }
+
+    // 3. Draw points & labels
+    for (const id in pts) {
+        const p = pts[id];
+        ctx.globalAlpha = easeOut(Math.min(p.rawP * 2, 1));
+
+        const pColor = p.el.color === 'highlight' ? T.highlight
+                     : p.el.color === 'red'       ? '#ef4444'
+                     : p.el.color === 'green'      ? '#22c55e'
+                     : '#ffffff';
+
+        // Outer glow
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = pColor + '40';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = pColor;
+        ctx.fill();
+
+        if (p.el.label) {
+            ctx.fillStyle = pColor;
+            ctx.font = 'bold 28px ' + T.font;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(p.el.label, p.x, p.y - 14);
+        }
+    }
+
+    ctx.restore();
+    return zoneH + 20;
 }
 
 function drawHighlights(currentTime) {
@@ -841,11 +984,14 @@ const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames'
             ffArgs.push('-c:a', 'aac', '-b:a', '128k');
         }
 
+        const codec = args.codec || 'libx264';
+        const preset = args.preset || 'medium';
+        const extraArgs = args.ffmpegExtra ? args.ffmpegExtra.split(' ') : [];
+
         ffArgs.push(
-            '-c:v', 'h264_nvenc',
-            '-preset', 'p4',
-            '-cq', '20',
-            '-b:v', '0',
+            '-c:v', codec,
+            '-preset', preset,
+            ...extraArgs,
             '-pix_fmt', 'yuv420p',
             '-shortest',
             outputFile
@@ -895,11 +1041,12 @@ const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames'
         console.log(JSON.stringify({ type: 'done', status: 'success', totalFrames, outputFile }));
 
     } else {
-        // ── FRAMES MODE: write PNG files (legacy) ──
+        // ── FRAMES MODE: write JPEG files (much faster than PNG) ──
         for (let f = 0; f < totalFrames; f++) {
             renderFrame(f / FPS);
             const num = String(f).padStart(6, '0');
-            fs.writeFileSync(path.join(outputDir, `frame_${num}.png`), canvas.toBuffer('image/png'));
+            // Use JPEG instead of PNG: ~3x faster to write, GPU encoder reads equally fast
+            fs.writeFileSync(path.join(outputDir, `frame_${num}.jpg`), canvas.toBuffer('image/jpeg', { quality: 0.92 }));
             if (f % 30 === 0 || f === totalFrames - 1) {
                 const pct = Math.round((f / totalFrames) * 100);
                 console.log(JSON.stringify({ type: 'progress', percent: pct, frame: f, total: totalFrames, message: `Frame ${f}/${totalFrames} (${pct}%)` }));

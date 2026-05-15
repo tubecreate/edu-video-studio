@@ -195,11 +195,29 @@ async def generate_tts_for_script(
 
         if not voice_text:
             duration = 2.0
+            # Generate silent audio file so merged audio stays in sync with timing
+            audio_filename = f"step_{step_id:03d}.mp3"
+            audio_path = os.path.join(output_dir, audio_filename)
+            try:
+                silence_cmd = [
+                    "ffmpeg", "-y", "-f", "lavfi", "-i",
+                    f"anullsrc=channel_layout=mono:sample_rate=24000:duration={duration}",
+                    "-c:a", "libmp3lame", "-b:a", "32k", audio_path
+                ]
+                proc = await asyncio.create_subprocess_exec(
+                    *silence_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+                if proc.returncode == 0 and os.path.exists(audio_path):
+                    audio_files.append(audio_path)
+            except Exception as e:
+                logger.warning(f"Failed to create silence for step {step_id}: {e}")
+
             timing_steps.append({
                 "id": step_id,
                 "start": round(current_offset, 3),
                 "end": round(current_offset + duration, 3),
-                "audio": None,
+                "audio": audio_filename,
                 "duration": duration,
                 "words": [],
             })

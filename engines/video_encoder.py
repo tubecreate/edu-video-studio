@@ -14,6 +14,14 @@ logger = logging.getLogger("EduVideoStudio.VideoEncoder")
 
 CANVAS_RENDERER_JS = Path(__file__).parent / "canvas_renderer.js"
 
+# Encoder presets for ffmpeg
+ENCODER_MAP = {
+    "cpu":   {"codec": "libx264",    "preset": "fast",     "extra": ["-crf", "22", "-threads", "0"]},
+    "nvenc": {"codec": "h264_nvenc", "preset": "p1",       "extra": ["-rc", "vbr", "-cq", "23", "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]},
+    "qsv":   {"codec": "h264_qsv",  "preset": "veryfast", "extra": ["-global_quality", "23", "-look_ahead", "0"]},
+    "amf":   {"codec": "h264_amf",  "preset": "speed",    "extra": ["-rc", "cqp", "-qp_i", "22", "-qp_p", "22", "-usage", "transcoding"]},
+}
+
 
 def _find_node_modules():
     """Find node_modules with canvas package."""
@@ -53,6 +61,7 @@ async def render_and_encode(
     project_id: str,
     theme: str = "dark",
     render_mode: str = "pipe",
+    gpu_encoder: str = "nvenc",
     progress_callback: Optional[Callable] = None,
 ) -> str:
     """Render + encode video. Supports 'pipe' and 'frames' modes."""
@@ -74,12 +83,12 @@ async def render_and_encode(
     if render_mode == "pipe":
         return await _render_pipe(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback,
+            theme, audio_path, final_video, env, progress_callback, gpu_encoder,
         )
     else:
         return await _render_frames(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback,
+            theme, audio_path, final_video, env, progress_callback, gpu_encoder,
         )
 
 
@@ -118,8 +127,9 @@ async def _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, pct
 
 
 async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
-                       theme, audio_path, final_video, env, progress_callback):
+                       theme, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
     """PIPE MODE: render + encode in single step (fast)."""
+    enc = ENCODER_MAP.get(gpu_encoder, ENCODER_MAP["nvenc"])
     cmd = [
         node_exe, str(CANVAS_RENDERER_JS),
         "--script", script_path,
@@ -129,13 +139,18 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
         "--fps", "30",
         "--mode", "pipe",
         "--outputFile", final_video,
+        "--codec", enc["codec"],
+        "--preset", enc["preset"],
     ]
+    if enc.get("extra"):
+        cmd.extend(["--ffmpegExtra", " ".join(enc["extra"])])
     if os.path.isfile(audio_path):
         cmd.extend(["--audio", audio_path])
 
-    logger.info(f"[Pipe] Rendering → {final_video}")
+    encoder_label = {"cpu": "CPU", "nvenc": "NVIDIA GPU", "qsv": "Intel QSV", "amf": "AMD AMF"}.get(gpu_encoder, gpu_encoder)
+    logger.info(f"[Pipe] Rendering → {final_video} (encoder: {encoder_label})")
     if progress_callback:
-        progress_callback(8, "⚡ Pipe: rendering + encoding...")
+        progress_callback(8, f"⚡ Pipe + {encoder_label}: rendering...")
 
     await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (8, 96))
 
@@ -151,7 +166,7 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
 
 
 async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir,
-                         theme, audio_path, final_video, env, progress_callback):
+                          theme, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
     """FRAMES MODE: render PNGs then FFmpeg encode (stable)."""
     frames_dir = os.path.join(os.path.dirname(script_path), "frames")
     os.makedirs(frames_dir, exist_ok=True)
@@ -178,24 +193,28 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
 
     await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (5, 65))
 
-    frame_count = len([f for f in os.listdir(frames_dir) if f.endswith(".png")])
+    frame_count = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
     if frame_count == 0:
         raise RuntimeError("No frames rendered!")
     logger.info(f"Rendered {frame_count} frames")
 
-    # Step 2: FFmpeg encode
+    # Step 2: FFmpeg encode with selected encoder
+    enc = ENCODER_MAP.get(gpu_encoder, ENCODER_MAP["nvenc"])
+    encoder_label = {"cpu": "CPU", "nvenc": "NVIDIA GPU", "qsv": "Intel QSV", "amf": "AMD AMF"}.get(gpu_encoder, gpu_encoder)
     if progress_callback:
-        progress_callback(68, "🎬 Encoding video...")
+        progress_callback(68, f"🎬 Encoding ({encoder_label})...")
 
     ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
     raw_video = os.path.join(output_dir, f"raw_{os.path.basename(final_video)}")
-    frame_pattern = os.path.join(frames_dir, "frame_%06d.png")
+    frame_pattern = os.path.join(frames_dir, "frame_%06d.jpg")
 
     cmd_encode = [
         ffmpeg_exe, "-y",
+        "-threads", "0",               # use all CPU threads for decode
         "-framerate", "30",
         "-i", frame_pattern,
-        "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0",
+        "-c:v", enc["codec"], "-preset", enc["preset"],
+    ] + enc.get("extra", []) + [
         "-pix_fmt", "yuv420p",
         raw_video,
     ]
@@ -204,8 +223,30 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
     )
     _, stderr2 = await proc2.communicate()
     if proc2.returncode != 0:
-        raise RuntimeError(f"FFmpeg encode failed: {stderr2.decode()[:300]}")
-
+        # Fallback to CPU if GPU encoder fails
+        if gpu_encoder != "cpu":
+            logger.warning(f"{encoder_label} failed, falling back to CPU: {stderr2.decode()[:200]}")
+            if progress_callback:
+                progress_callback(70, "⚠️ GPU failed, falling back to CPU...")
+            cpu_enc = ENCODER_MAP["cpu"]
+            cmd_fallback = [
+                ffmpeg_exe, "-y",
+                "-threads", "0",
+                "-framerate", "30",
+                "-i", frame_pattern,
+                "-c:v", cpu_enc["codec"], "-preset", cpu_enc["preset"],
+            ] + cpu_enc.get("extra", []) + [
+                "-pix_fmt", "yuv420p",
+                raw_video,
+            ]
+            proc_fb = await asyncio.create_subprocess_exec(
+                *cmd_fallback, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr_fb = await proc_fb.communicate()
+            if proc_fb.returncode != 0:
+                raise RuntimeError(f"FFmpeg encode failed (CPU fallback): {stderr_fb.decode()[:300]}")
+        else:
+            raise RuntimeError(f"FFmpeg encode failed: {stderr2.decode()[:300]}")
     # Step 3: Mux audio
     if os.path.isfile(audio_path):
         if progress_callback:

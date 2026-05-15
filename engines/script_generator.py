@@ -107,16 +107,21 @@ Renderer sẽ tự tạo vùng vẽ riêng.
 7. Step cuối: box "result" + kết luận, clear: true (trang mới cho kết luận)
 8. voice_text: nói tự nhiên như giáo viên đang chỉ bảng, giải thích tư duy, KHÔNG đọc nguyên text khô khan.
 9. Dùng màu khác nhau: "highlight" cho quan trọng, "green" cho đúng, "red" cho sai, "cyan" cho nhấn mạnh
-10. Bài có a), b), c)... → PHẦN ĐẦU chung, rồi CLEAR cho mỗi phần
-11. MỖI PHÉP TÍNH ĐẶT TÍNH: Ít nhất 4-5 steps (setup + từng hàng + kết quả)
+11. ĐỐI VỚI PHÉP ĐẶT TÍNH NHIỀU BƯỚC:
+    - Step đầu tiên: Ghi text (ví dụ "a)") + box "equation" + math_calc (setup phép tính).
+    - Các Step tiếp theo của cùng phép tính: CHỈ GHI LẠI phần tử `math_calc` với các mảng `intermediates` được thêm vào. TUYỆT ĐỐI KHÔNG lặp lại `text` hay `box` ở các step sau để tránh bị nhân bản ô trống!
+12. ⚠️ PHÉP NHÂN:
+    - Nhân với số CÓ 1 CHỮ SỐ (VD: 815 x 6): Điền trực tiếp kết quả vào `result`, KHÔNG có `intermediates` (không có tích riêng).
+    - Nhân với số CÓ NHIỀU CHỮ SỐ: Dùng `intermediates` để ghi các tích riêng, sau đó mới ghi `result`.
 
 📝 VÍ DỤ DẠNG TOÁN:
 
 🔢 Phép tính (+, -, x):
 Step 1: icon + title → clear:false
 Step 2: text đề bài tổng quan → clear:false
-Step 3: text "a)" + box "equation" → bên trong dùng "math_calc" → clear:false
-Step 4: text "b)" + box "equation" → bên trong dùng "math_calc" → clear:true (trang mới)
+Step 3: text "a)" + box "equation" + "math_calc" → clear:false
+Step 4: CHỈ CẬP NHẬT "math_calc" (không lặp lại text và box) → clear:false
+Step 5: text "b)" + box "equation" + "math_calc" → clear:true (trang mới)
 
 ➗💡 ĐẶC BIỆT VỚI PHÉP CHIA (VD: 8962 : 28):
    - Phép chia BẮT BUỘC dùng math_calc với op:":", operands, intermediates (các số dư/hạ) và result_partial (thương).
@@ -170,13 +175,28 @@ VISION_ANALYSIS_PROMPT = """Bạn là GIÁO VIÊN TOÁN giỏi. Hãy PHÂN TÍCH
 2. XÁC ĐỊNH dạng toán (đặt tính, điền trống, bảng, hình học, bài toán lời văn...)
 3. GHI LẠI chính xác nội dung đề bài. ĐẶC BIỆT CHÚ Ý: XÓA BỎ mọi khoảng trắng (dấu cách) bên trong các con số nguyên (VD: "6 825" -> "6825"). Đối với SỐ THẬP PHÂN, TUYỆT ĐỐI giữ nguyên dấu phẩy (,) hoặc chấm (.) để phân biệt rõ ràng (VD: "3,5").
 4. ĐƯA RA hướng giải và đáp án chi tiết
+5. ⚠️ BẮT BUỘC ĐỐI VỚI ẢNH CÓ HÌNH VẼ, HÌNH HỌC, ĐƯỜNG THẲNG:
+   - Bạn PHẢI trích xuất toàn bộ cấu trúc hình học (điểm, đoạn thẳng, góc vuông) vào phần "MÔ TẢ HÌNH HỌC CHI TIẾT".
+   - Cung cấp toạ độ tương đối (x, y) từ 0.0 đến 1.0 cho từng điểm để hệ thống Canvas có thể vẽ lại chính xác.
+   - Định nghĩa rõ các đoạn thẳng (nối từ điểm nào đến điểm nào).
+   - Định nghĩa rõ các góc vuông nếu có (đỉnh nào, tạo bởi 2 điểm nào).
 
 📋 FORMAT OUTPUT (text thuần, KHÔNG phải JSON, KHÔNG viết kịch bản):
 
-DẠNG TOÁN: [tên dạng toán — VD: đặt tính cộng, điền chỗ trống, bài toán lời văn...]
+DẠNG TOÁN: [tên dạng toán — VD: đặt tính cộng, điền chỗ trống, bài toán lời văn, hình học...]
 
 ĐỀ BÀI:
 [Chép lại CHÍNH XÁC 100% đề bài từ ảnh — từng số, từng chữ, từng dấu]
+
+MÔ TẢ HÌNH HỌC CHI TIẾT (BẮT BUỘC NẾU ẢNH CÓ HÌNH VẼ):
+- Các điểm (points):
+  + Điểm A: x=0.2, y=0.5
+  + Điểm C: x=0.5, y=0.1
+  + Điểm H: x=0.5, y=0.5
+- Các đoạn thẳng (segments):
+  + HA (từ H đến A)
+  + HC (từ H đến C)
+- Góc vuông (nếu có): Góc đỉnh H tạo bởi HA và HC.
 
 CÁC PHÉP TÍNH / CÂU HỎI:
 - Câu a: [nội dung chính xác]
@@ -352,20 +372,22 @@ Kịch bản cần có:
 
 
 
-def _call_vision_api(prompt: str, image_bytes: Optional[bytes] = None, max_tokens: int = 16384, ai_settings: dict = None) -> str:
+def _call_vision_api(prompt: str, image_bytes: Optional[bytes] = None, image_bytes_list: Optional[list[bytes]] = None, max_tokens: int = 16384, ai_settings: dict = None) -> str:
     """Call Vision API (Local or Cloud based on settings)."""
     
     url, api_key, model = _resolve_ai_params(ai_settings)
 
     content = [{"type": "text", "text": prompt}]
 
-    if image_bytes:
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
+    imgs = []
+    if image_bytes: imgs.append(image_bytes)
+    if image_bytes_list: imgs.extend(image_bytes_list)
+
+    for img in imgs:
+        b64 = base64.b64encode(img).decode("utf-8")
         mime = "image/jpeg"
-        if image_bytes[:4] == b'\x89PNG':
-            mime = "image/png"
-        elif image_bytes[:4] == b'RIFF':
-            mime = "image/webp"
+        if img[:4] == b'\x89PNG': mime = "image/png"
+        elif img[:4] == b'RIFF': mime = "image/webp"
         
         content.append({
             "type": "image_url",
@@ -484,20 +506,22 @@ def _resolve_ai_params(ai_settings: dict = None):
     return f"{base_url}/chat/completions", "", model
 
 
-def _call_script_api_stream(prompt: str, image_bytes: Optional[bytes] = None, ai_settings: dict = None):
+def _call_script_api_stream(prompt: str, image_bytes: Optional[bytes] = None, image_bytes_list: Optional[list[bytes]] = None, ai_settings: dict = None):
     """Call AI for script generation with STREAMING — yields chunks.
     Uses cloud/custom AI settings (NOT the hardcoded vision endpoint)."""
     url, api_key, model = _resolve_ai_params(ai_settings)
 
     content = [{"type": "text", "text": prompt}]
 
-    if image_bytes:
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
+    imgs = []
+    if image_bytes: imgs.append(image_bytes)
+    if image_bytes_list: imgs.extend(image_bytes_list)
+
+    for img in imgs:
+        b64 = base64.b64encode(img).decode("utf-8")
         mime = "image/jpeg"
-        if image_bytes[:4] == b'\x89PNG':
-            mime = "image/png"
-        elif image_bytes[:4] == b'RIFF':
-            mime = "image/webp"
+        if img[:4] == b'\x89PNG': mime = "image/png"
+        elif img[:4] == b'RIFF': mime = "image/webp"
 
         content.append({
             "type": "image_url",
@@ -597,6 +621,7 @@ def _extract_json(text: str) -> dict:
 async def generate_lesson_script(
     text: str = "",
     image_bytes: Optional[bytes] = None,
+    image_bytes_list: Optional[list[bytes]] = None,
     subject: str = "auto",
     lang: str = "vi",
     ai_settings: dict = None,
@@ -654,6 +679,7 @@ async def generate_lesson_script(
 async def generate_lesson_script_stream(
     text: str = "",
     image_bytes: Optional[bytes] = None,
+    image_bytes_list: Optional[list[bytes]] = None,
     subject: str = "auto",
     lang: str = "vi",
     ai_settings: dict = None,
@@ -669,7 +695,7 @@ async def generate_lesson_script_stream(
     # ══════════════════════════════════════════════════════════════
     # STAGE 1: VISION — Phân tích ảnh (Local API)
     # ══════════════════════════════════════════════════════════════
-    if image_bytes:
+    if image_bytes or image_bytes_list:
         yield {"type": "status", "text": "👁️ Giai đoạn 1: Vision AI đang đọc ảnh..."}
 
         # Build vision prompt with language hint
@@ -680,8 +706,9 @@ async def generate_lesson_script_stream(
             vision_prompt += f"\n\nThông tin bổ sung từ người dùng:\n{text}"
 
         try:
+            vision_settings = ai_settings.get("vision", {}) if ai_settings else {}
             raw_outline = await asyncio.to_thread(
-                _call_vision_api, vision_prompt, image_bytes, 4096
+                _call_vision_api, vision_prompt, image_bytes, image_bytes_list, 4096, vision_settings
             )
             logger.info(f"Vision Stage 1 returned {len(raw_outline)} chars")
             yield {"type": "status", "text": f"✅ Vision đã phân tích xong ({len(raw_outline)} ký tự)"}
@@ -822,8 +849,19 @@ Hãy dựa trên BÀI PHÂN TÍCH ở trên để TẠO KỊCH BẢN JSON HOÀN 
 - Tuân thủ CHÍNH XÁC mọi con số, phép tính, và đáp án trong phân tích.
 - KHÔNG tự ý thay đổi đề bài hay đáp số.
 - Tạo voice_text tự nhiên như giáo viên đang giảng bài. ĐẶC BIỆT CHÚ Ý: Bắt buộc VIẾT THÀNH CHỮ tất cả các dấu/kí hiệu toán học để AI đọc không bị nhầm (VD: "+" thành "cộng", "-" thành "trừ", "=" thành "bằng", "?" thành "số cần tìm" hoặc "chấm hỏi"). TUYỆT ĐỐI KHÔNG để lại các kí hiệu toán học (như +, -, x, :, =) trong chuỗi voice_text. Khi đọc số thập phân phải có chữ "phẩy" (VD: "3,5" -> "ba phẩy năm").
-- Thiết kế elements hiển thị phù hợp (text, math_calc, box, reveal...).
-- Tạo đủ steps cho từng bước giải, sử dụng clear khi cần thiết."""
+- Thiết kế elements hiển thị phù hợp (text, math_calc, box, reveal, point, segment, right_angle...).
+- Tạo đủ steps cho từng bước giải, sử dụng clear khi cần thiết.
+
+⚠️ ĐẶC BIỆT — NẾU PHÂN TÍCH CÓ PHẦN "MÔ TẢ HÌNH HỌC CHI TIẾT":
+- Đây là dữ liệu tọa độ hình vẽ được Vision AI trích xuất từ ảnh đề bài.
+- BẮT BUỘC phải dịch toàn bộ sang JSON elements trong kịch bản:
+  * Mỗi "Điểm X: x=..., y=..." → {{"type":"point", "id":"X", "x":0._, "y":0._, "label":"X", "color":"white"}}
+  * Mỗi đoạn thẳng "AB" → {{"type":"segment", "from":"A", "to":"B", "color":"white"}}
+  * Nếu có góc vuông → {{"type":"right_angle", "vertex":"H", "from":"A", "to":"C"}}
+- TẤT CẢ geometry elements (point, segment, right_angle) PHẢI ĐẶT TRONG CÙNG 1 STEP để renderer vẽ vào 1 vùng riêng.
+- Ví dụ step hình học:
+  {{"elements": [{{"type":"point","id":"A","x":0.2,"y":0.5,"label":"A"}}, {{"type":"point","id":"H","x":0.5,"y":0.5,"label":"H"}}, {{"type":"point","id":"C","x":0.5,"y":0.1,"label":"C"}}, {{"type":"segment","from":"A","to":"H"}}, {{"type":"segment","from":"H","to":"C"}}], "voice_text":"Quan sát hình: đường thẳng HA và đường thẳng HC cắt nhau tại điểm H.", "clear":false}}
+- Với bài có 2 hình (a và b): mỗi hình là 1 step riêng, dùng clear:true để chuyển sang hình tiếp theo."""
     else:
         prompt += "\n\nKhông có dữ liệu outline. Hãy tạo kịch bản demo cơ bản."
 
@@ -850,3 +888,83 @@ def _validate_script(script: dict, subject: str) -> dict:
 
     logger.info(f"Generated script: '{script['title']}' with {len(script['steps'])} steps")
     return script
+
+
+# ── Wizard: Scan Lesson Count ────────────────────────────────────
+
+SCAN_LESSON_PROMPT = """Bạn là trợ lý giáo dục. Hãy phân tích nội dung bài tập/đề toán sau và đếm số lượng câu hỏi/bài toán cần giải riêng biệt.
+
+🎯 NHIỆM VỤ:
+1. Đọc kỹ nội dung (ảnh hoặc text)
+2. Đếm số câu hỏi/bài toán độc lập (VD: câu a, b, c; bài 1, 2, 3; phép tính 1, 2, 3...)
+3. Đặt tên ngắn gọn cho từng câu/bài
+
+⚠️ QUY TẮC:
+- Mỗi câu hỏi con (a, b, c...) = 1 bài riêng
+- Mỗi phép tính riêng biệt = 1 bài riêng
+- Nếu chỉ có 1 câu hỏi tổng thể → lesson_count = 1
+- Tên bài: ngắn gọn, tối đa 40 ký tự, ghi rõ nội dung chính
+
+OUTPUT: Chỉ trả về JSON hợp lệ, không giải thích thêm:
+{
+  "lesson_count": 3,
+  "lesson_titles": ["Câu a: 319 + 425 = ?", "Câu b: 7008 - 2451", "Câu c: 9 × 6"],
+  "suggested_mode": "multi",
+  "summary": "Đề có 3 phép tính cộng trừ nhân riêng biệt"
+}
+
+Nếu chỉ 1 bài: "suggested_mode" = "single", ngược lại = "multi".
+"""
+
+async def scan_lesson_count(
+    text: str = "",
+    image_bytes: Optional[bytes] = None,
+    image_bytes_list: Optional[list] = None,
+    lang: str = "vi",
+    subject: str = "general",
+    ai_settings: dict = None,
+) -> dict:
+    """
+    Use Vision AI to detect how many lessons/questions are in the uploaded content.
+    Returns {lesson_count, lesson_titles, suggested_mode, summary}
+    """
+    import asyncio
+
+    prompt = SCAN_LESSON_PROMPT
+    if text:
+        prompt += f"\n\nNỘI DUNG:\n{text}"
+
+    loop = asyncio.get_event_loop()
+    raw = await loop.run_in_executor(
+        None,
+        lambda: _call_vision_api(
+            prompt=prompt,
+            image_bytes=image_bytes,
+            image_bytes_list=image_bytes_list,
+            max_tokens=1024,
+            ai_settings=ai_settings,
+        )
+    )
+
+    # Parse JSON from response
+    import re
+    json_match = re.search(r'\{[\s\S]*\}', raw)
+    if json_match:
+        try:
+            result = json.loads(json_match.group())
+            result.setdefault("lesson_count", 1)
+            result.setdefault("lesson_titles", ["Bài 1"])
+            result.setdefault("suggested_mode", "single")
+            result.setdefault("summary", "")
+            return result
+        except Exception:
+            pass
+
+    # Fallback
+    return {
+        "lesson_count": 1,
+        "lesson_titles": ["Bài 1"],
+        "suggested_mode": "single",
+        "summary": raw[:200] if raw else "Không phân tích được."
+    }
+
