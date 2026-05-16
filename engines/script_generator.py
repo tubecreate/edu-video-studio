@@ -95,7 +95,7 @@ Renderer sẽ tự tạo vùng vẽ riêng.
 - Dùng khi: bài có dạng điền số vào chỗ trống, hoặc "319 + 425 = 425 + ?"
 
 1️⃣1️⃣ IMAGE_GENERATION — tạo ảnh minh họa tự động qua ChatGPT (CHỈ dùng khi được yêu cầu sử dụng ảnh minh họa):
-{"type":"image_generation", "prompt":"Mô tả ảnh bằng tiếng Anh, phong cách icon đơn giản, một khái niệm duy nhất, nền tối", "width":800, "height":700}
+{"type":"image_generation", "prompt":"Mô tả ảnh bằng tiếng Anh, phong cách icon đơn giản, một khái niệm duy nhất, nền tối", "width":700, "height":500}
 - CHỈ dùng element này thay cho geometry (point/segment/right_angle) khi người dùng chọn chế độ ảnh minh họa.
 - prompt phải bằng tiếng ANH, đơn giản, 1 khái niệm duy nhất, phong cách icon minimal.
 - Không dùng cùng lúc với point/segment/right_angle.
@@ -131,13 +131,10 @@ Mỗi step PHẢI có ít nhất một element trực quan phù hợp. Bảng ch
 
 
 🔴 QUY TẮC QUAN TRỌNG VỀ STEP CHỨA ẢNH:
-- Step chứa image_generation PHẢI có "clear": true (màn hình mới, tách biệt hoàn toàn)
-- Step chứa image_generation CHỈ được có ảnh đó + tối đa 1 caption ngắn (text ≤ 10 ký tự)
-- KHÔNG được có text giải thích, box, reveal cùng step với image_generation
-- Step SAU step ảnh cũng phải "clear": true (bắt đầu trang nội dung mới)
-- Ví dụ đúng:
-  Step 3: {clear: true, elements: [{type:"image_generation", prompt:"..."}]}
-  Step 4: {clear: true, elements: [{type:"text", text:"Đề bài:", ...}, ...]}
+- ĐỐI VỚI BÀI TOÁN KỂ CHUYỆN/LỊCH SỬ: BẮT BUỘC phải có `image_generation` ở MỌI step kể chuyện. KHÔNG ĐƯỢC để step kể chuyện chỉ có toàn chữ!
+- Có thể kết hợp `image_generation` cùng với `text`, `box` trong cùng 1 step (Ảnh xếp trên, chữ xếp dưới).
+- `image_generation` luôn phải là element ĐẦU TIÊN trong list `elements` của step đó.
+- Cố gắng dùng `image_generation` để minh họa mọi tình huống thực tế hoặc nhân vật lịch sử.
 
 🔄 CHUYỂN CẢNH (clear):
 - Mỗi step có thuộc tính "clear": true/false
@@ -369,7 +366,7 @@ QUY TAC ANH: ANH DI KEM TEXT, KHONG TACH BIET!
   NGUYEN TAC THEM ANH:
     - Anh Loai B va C: image_generation la element DAU TIEN trong step, text la element TIEP THEO
     - Moi anh can prompt TIENG ANH rieng biet, phu hop noi dung
-    - Co the dung nhieu anh (nhieu step khac nhau)
+    - LUON LUON tao anh minh hoa (image_generation) cho cac step: Kể chuyện lịch sử, ví dụ thực tế, tình huống đời sống, hoặc giải thích lý thuyết (VD: nhà toán học Brahmagupta, đếm cừu, chia bánh). Cứ có nhân vật hoặc bối cảnh là BẮT BUỘC phải có ảnh.
     - Buoc chi co math_calc + reveal thi KHONG can them anh
 
 VISUAL CHO STEP QUY TAC (bat buoc):
@@ -398,6 +395,7 @@ Step 3  [clear:true] -- SO DO + DE BAI (anh va text cung nhau)
 
 ⚠️ QUY TẮC QUAN TRỌNG:
 - ĐỌC CHÍNH XÁC mọi con số, chữ từ ảnh — KHÔNG ĐƯỢC sai số hoặc bỏ sót!
+- NẾU BÀI CÓ LỊCH SỬ / KỂ CHUYỆN / LÝ THUYẾT: BẮT BUỘC chèn thêm 1 `image_generation` vào MỖI step kể chuyện để minh họa (ví dụ: chân dung nhà toán học, bản thảo cổ, v.v). Tuyệt đối không để step kể chuyện/lịch sử chỉ có mỗi chữ!
 - Nếu đề có nhiều câu (a, b, c...) → liệt kê TẤT CẢ từng câu
 - Nếu là BẢNG → đọc từng ô, ghi rõ giá trị
 - Nếu là PHÉP TÍNH ĐẶT TÍNH → ghi rõ từng bước nhẩm
@@ -750,23 +748,34 @@ def _call_script_api_stream(prompt: str, image_bytes: Optional[bytes] = None, im
 
 
 def _extract_json(text: str) -> dict:
-    """Extract JSON from AI response, handling markdown fences and edge cases."""
+    """Extract JSON from AI response, handling reasoning text and markdown fences."""
     import re
-    # Remove markdown code fences
-    text = re.sub(r"```json\s*", "", text)
-    text = re.sub(r"```\s*", "", text)
-    # Remove <think> blocks
+    
+    # 1. First, try to extract specifically from ```json ... ``` fences
+    # This is the safest way when dealing with DeepSeek Pro reasoning text
+    json_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if json_blocks:
+        for block in json_blocks:
+            try:
+                return json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+
+    # 2. If no valid json blocks, clean up the text
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = text.strip()
 
-    # Try direct parse first
+    # Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Find JSON by matching balanced braces
-    start = text.find("{")
+    # 3. Find JSON by matching balanced braces, starting from the LAST major object
+    # Often reasoning text is at the beginning, so we search for {"title" or just {
+    match = re.search(r'\{\s*"title"', text)
+    start = match.start() if match else text.find("{")
+    
     if start == -1:
         raise ValueError(f"Could not extract JSON from AI response: {text[:200]}...")
 
@@ -961,7 +970,7 @@ async def generate_lesson_script_stream(
 
 ⚠️ CHẾ ĐỘ ẢNH MINH HỌA (ĐỌC KỸ):
 
-📌 QUY TẮC DUY NHẤT: Mỗi bài chỉ được chèn TỐI ĐA 1 (MỘT) element "image_generation" — đặt ở step đầu (step 1 hoặc 2) như ảnh bìa minh họa khái niệm.
+📌 SỐ LƯỢNG ẢNH: Bạn CÓ THỂ chèn NHIỀU `image_generation` (mỗi ảnh ở một step khác nhau). Đối với các bài kể chuyện, lịch sử hoặc bối cảnh thực tế dài, hãy cố gắng tạo 1 ảnh cho MỖI khái niệm/giai đoạn! (VD: bài 10 steps có thể có 5-10 ảnh).
 
 ✅ Ảnh minh họa PHẢI có giá trị trực quan — giúp học sinh hình dung khái niệm:
    - Khái niệm số học: cân đĩa (so sánh), thanh số, nhóm khối (tính toán)
@@ -1036,7 +1045,22 @@ def _build_script_prompt(text: str, image_bytes: Optional[bytes], subject: str, 
     elif subject not in ("general", "math", "auto", ""):
         prompt += f"\n\nThis is a {subject} lesson. (No specific template found, please design a suitable step-by-step logic)."
 
-    prompt += f"\n\nIMPORTANT LANGUAGE REQUIREMENT: You MUST generate the entire script (including all text, labels, and voice_text) strictly in the language corresponding to language code '{lang}' (e.g., 'vi' for Vietnamese, 'en' for English)."
+    _LANG_NAMES = {
+        'vi': 'Vietnamese (Tiếng Việt đầy đủ dấu thanh)',
+        'en': 'English',
+        'zh': 'Chinese Simplified (简体中文)',
+        'ja': 'Japanese (日本語)',
+        'ko': 'Korean (한국어)',
+        'fr': 'French (Français)',
+        'de': 'German (Deutsch)',
+        'es': 'Spanish (Español)',
+        'pt': 'Portuguese (Português)',
+        'ar': 'Arabic (العربية)',
+        'th': 'Thai (ภาษาไทย)',
+        'id': 'Indonesian (Bahasa Indonesia)',
+    }
+    _lang_name = _LANG_NAMES.get(lang, f'language code {lang!r}')
+    prompt += f'\n\n⚠️ CRITICAL LANGUAGE RULE: Write ALL voice_text, text elements, and labels EXCLUSIVELY in {_lang_name}. NEVER omit accents, diacritics, or tone marks. For Vietnamese: always include full tone marks (ấ, ầ, é, ẽ, đ, etc). Do NOT transliterate or use ASCII approximations.'
 
     if text:
         prompt += f"\n\nNội dung bài học cần phân tích:\n{text}"
@@ -1060,8 +1084,22 @@ def _build_script_prompt_from_outline(raw_outline: str, image_bytes: Optional[by
     elif subject not in ("general", "math", "auto", ""):
         prompt += f"\n\nThis is a {subject} lesson. (No specific template found, please design a suitable step-by-step logic)."
 
-    prompt += f"\n\nIMPORTANT LANGUAGE REQUIREMENT: You MUST generate the entire script (including all text, labels, and voice_text) strictly in the language corresponding to language code '{lang}'."
-
+    _LANG_NAMES = {
+        'vi': 'Vietnamese (Tiếng Việt đầy đủ dấu thanh)',
+        'en': 'English',
+        'zh': 'Chinese Simplified (简体中文)',
+        'ja': 'Japanese (日本語)',
+        'ko': 'Korean (한국어)',
+        'fr': 'French (Français)',
+        'de': 'German (Deutsch)',
+        'es': 'Spanish (Español)',
+        'pt': 'Portuguese (Português)',
+        'ar': 'Arabic (العربية)',
+        'th': 'Thai (ภาษาไทย)',
+        'id': 'Indonesian (Bahasa Indonesia)',
+    }
+    _lang_name = _LANG_NAMES.get(lang, f'language code {lang!r}')
+    prompt += f'\n\n⚠️ CRITICAL LANGUAGE RULE: Write ALL voice_text, text elements, and labels EXCLUSIVELY in {_lang_name}. NEVER omit accents, diacritics, or tone marks. For Vietnamese: always include full tone marks (ấ, ầ, é, ẽ, đ, etc). Do NOT transliterate or use ASCII approximations.'
     if raw_outline:
         prompt += f"""
 

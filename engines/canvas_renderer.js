@@ -130,6 +130,11 @@ function wrapText(text, maxW, font) {
 }
 
 function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+function easeOutBack(x) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
 
 // ── Word Highlight Helpers ───────────────────────────────────────
 
@@ -235,7 +240,36 @@ function renderElementAtY(el, cursorY, stepProgress) {
             ctx.fillStyle = rc(el.color);
             const align = el.align || 'left';
             ctx.textAlign = align; ctx.textBaseline = 'top';
-            const rawLines = (el.text || '').split('\n');
+            
+            let rawText = el.text || '';
+            let anim = el.animation;
+            if (!anim) {
+                const rand = rawText.length % 3;
+                anim = rand === 0 ? 'typewriter' : (rand === 1 ? 'slide_in_left' : 'slide_up');
+            }
+            
+            const fastP = Math.min(stepProgress * 4.0, 1.0);
+            
+            if (anim === 'typewriter' && stepProgress < 1.0) {
+                const showLen = Math.floor(rawText.length * fastP);
+                rawText = rawText.substring(0, showLen);
+            }
+            
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            if (anim === 'slide_in_left' && stepProgress < 1.0) {
+                offsetX = -40 * (1 - easeOutBack(fastP));
+            } else if (anim === 'slide_up' && stepProgress < 1.0) {
+                offsetY = 30 * (1 - easeOutBack(fastP));
+            }
+            
+            ctx.save();
+            if (offsetX !== 0 || offsetY !== 0) {
+                ctx.translate(offsetX, offsetY);
+            }
+            
+            const rawLines = rawText.split('\n');
             let totalH = 0;
             for (const raw of rawLines) {
                 const wrapped = wrapText(raw, contentW, font);
@@ -245,6 +279,7 @@ function renderElementAtY(el, cursorY, stepProgress) {
                     totalH += fs * 1.4;
                 }
             }
+            ctx.restore();
             ctx.textAlign = 'left';
             return totalH + 6;
         }
@@ -265,13 +300,29 @@ function renderElementAtY(el, cursorY, stepProgress) {
             return 18;
         }
         case 'image': {
-            if (el.src && IMAGE_CACHE[el.src]) {
-                const img = IMAGE_CACHE[el.src];
-                const iw = el.width || 800;
-                const ih = el.height || 800;
-                const ix = (W - iw) / 2;
+              if (el.src && IMAGE_CACHE[el.src]) {
+                  const img = IMAGE_CACHE[el.src];
+                  const maxW = el.width || (W - MX * 2);
+                  const maxH = Math.min(el.height || 600, 600);
+                  const ratio = Math.min(maxW / img.width, maxH / img.height);
+                  const iw = Math.round(img.width * ratio);
+                  const ih = Math.round(img.height * ratio);
+                  const ix = (W - iw) / 2;
+                
+                const anim = el.animation || 'pop_in';
+                let scale = 1.0;
+                if (anim === 'pop_in' && stepProgress < 1.0) {
+                    const p = Math.min(stepProgress * 4.0, 1.0); // Fast pop in
+                    scale = 0.8 + 0.2 * easeOutBack(p);
+                }
                 
                 ctx.save();
+                if (scale !== 1.0) {
+                    ctx.translate(ix + iw/2, cursorY + ih/2);
+                    ctx.scale(scale, scale);
+                    ctx.translate(-(ix + iw/2), -(cursorY + ih/2));
+                }
+                
                 ctx.beginPath();
                 if (ctx.roundRect) ctx.roundRect(ix, cursorY, iw, ih, 16);
                 else ctx.rect(ix, cursorY, iw, ih);
@@ -280,14 +331,21 @@ function renderElementAtY(el, cursorY, stepProgress) {
                 ctx.restore();
                 
                 // Border
+                ctx.save();
+                if (scale !== 1.0) {
+                    ctx.translate(ix + iw/2, cursorY + ih/2);
+                    ctx.scale(scale, scale);
+                    ctx.translate(-(ix + iw/2), -(cursorY + ih/2));
+                }
                 ctx.strokeStyle = rc('border') || '#333';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 if (ctx.roundRect) ctx.roundRect(ix, cursorY, iw, ih, 16);
                 else ctx.rect(ix, cursorY, iw, ih);
                 ctx.stroke();
+                ctx.restore();
                 
-                return ih + 24; // padding
+                return ih + 24;
             }
             return 0;
         }
@@ -797,7 +855,7 @@ function renderUnifiedElements(unifiedEls, startY) {
             continue;
         }
 
-        const alpha = easeOut(Math.min(u.rawP * 2.5, 1));
+        const alpha = easeOut(Math.min(u.rawP * 4.0, 1.0)); // Fast fade in
 
         if (el.type === 'box') {
             const style = (BOX_STYLES[el.style] || BOX_STYLES.subtle)();
@@ -813,6 +871,13 @@ function renderUnifiedElements(unifiedEls, startY) {
                 continue;
             }
 
+            const anim = el.animation || 'slide_up';
+            let offsetY = 0;
+            if (anim === 'slide_up' && u.rawP < 1.0) {
+                const p = Math.min(u.rawP * 4.0, 1.0); // Fast slide up
+                offsetY = 30 * (1 - easeOutBack(p)); // Use easeOutBack for a little bounce
+            }
+
             let innerH = 0;
             for (const iu of inner) innerH += measureTextHeight(iu.el) + 6;
 
@@ -822,16 +887,17 @@ function renderUnifiedElements(unifiedEls, startY) {
 
             ctx.save();
             ctx.globalAlpha = alpha;
+            ctx.translate(0, offsetY);
             if (style.glow) { ctx.shadowColor = style.border; ctx.shadowBlur = 20; }
             roundRect(bx, cursorY, bw, boxH, 16);
             ctx.fillStyle = style.bg; ctx.fill();
             if (style.border) { ctx.strokeStyle = style.border; ctx.lineWidth = 2; ctx.stroke(); }
             ctx.restore();
 
-            let innerY = cursorY + boxPadding;
+            let innerY = cursorY + boxPadding + offsetY;
             for (const iu of inner) {
                 ctx.save();
-                ctx.globalAlpha = easeOut(Math.min(iu.rawP * 2.5, 1));
+                ctx.globalAlpha = easeOut(Math.min(iu.rawP * 4.0, 1.0));
                 innerY += renderElementAtY(iu.el, innerY, iu.rawP);
                 ctx.restore();
             }
@@ -957,7 +1023,16 @@ function estimateElementHeight(el) {
         case 'line':    return 18;
         case 'icon':    return (el.size || 64) + 10;
         case 'arrow':   return 30;
-        case 'image':   return (el.height || 800) + 24;
+        case 'image': {
+          if (el.src && IMAGE_CACHE[el.src]) {
+              const img = IMAGE_CACHE[el.src];
+              const maxW = el.width || (W - MX * 2);
+              const maxH = Math.min(el.height || 600, 600);
+              const ratio = Math.min(maxW / img.width, maxH / img.height);
+              return Math.round(img.height * ratio) + 24;
+          }
+          return (el.height || 600) + 24;
+        }
         case 'image_generation': return 380 + 24; // placeholder height
         case 'gap':     return 18;
         default:        return 0;
@@ -1170,7 +1245,16 @@ function _measureElH(el) {
     if (el.type === 'icon') return (el.size || 64) + 10;
     if (el.type === 'line') return 18;
     if (el.type === 'arrow') return 30;
-    if (el.type === 'image') return (el.height || 800) + 24;
+    if (el.type === 'image') {
+        if (el.src && IMAGE_CACHE[el.src]) {
+            const img = IMAGE_CACHE[el.src];
+            const maxW = el.width || (W - MX * 2);
+            const maxH = Math.min(el.height || 600, 600);
+            const ratio = Math.min(maxW / img.width, maxH / img.height);
+            return Math.round(img.height * ratio) + 24;
+        }
+        return (el.height || 600) + 24;
+    }
     return 0;
 }
 

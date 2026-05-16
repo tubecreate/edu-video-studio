@@ -472,6 +472,25 @@
                         </div>
                     </div>
 
+                    <!-- Language select -->
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">🌐 Ngôn ngữ</label>
+                        <select id="langSelect" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:6px 10px;font-size:13px;">
+                            <option value="vi">🇻🇳 Tiếng Việt</option>
+                            <option value="en">🇺🇸 English</option>
+                            <option value="zh">🇨🇳 中文 (Tiếng Trung)</option>
+                            <option value="ja">🇯🇵 日本語 (Tiếng Nhật)</option>
+                            <option value="ko">🇰🇷 한국어 (Tiếng Hàn)</option>
+                            <option value="fr">🇫🇷 Français (Tiếng Pháp)</option>
+                            <option value="de">🇩🇪 Deutsch (Tiếng Đức)</option>
+                            <option value="es">🇪🇸 Español (Tiếng Tây Ban Nha)</option>
+                            <option value="pt">🇧🇷 Português (Tiếng Bồ Đào Nha)</option>
+                            <option value="ar">🇸🇦 العربية (Tiếng Ả Rập)</option>
+                            <option value="th">🇹🇭 ภาษาไทย (Tiếng Thái)</option>
+                            <option value="id">🇮🇩 Bahasa Indonesia</option>
+                        </select>
+                    </div>
+
                     <!-- ChatGPT profile (only shows when chatgpt mode selected) -->
                     <div id="chatgptProfileRow" style="display:none;align-items:center;gap:8px;background:var(--bg-3);border-radius:6px;padding:8px 10px;">
                         <span style="font-size:12px;color:var(--text-3);">🌐 Profile trình duyệt:</span>
@@ -591,6 +610,11 @@
                     <div class="form-group"><label>Provider</label><select id="visionCloudProvider" class="select-input" onchange="loadCloudModels('vision')"></select></div>
                     <div class="form-group"><label>Model</label><select id="visionCloudModel" class="select-input"></select></div>
                 </div>
+                <div id="visionCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group"><label>Base URL</label><input type="text" id="visionCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1"></div>
+                    <div class="form-group"><label>API Key</label><input type="password" id="visionCustomApiKey" class="input" placeholder="Nhập API Key nếu có"></div>
+                    <div class="form-group"><label>Model Name</label><input type="text" id="visionCustomModel" class="input" placeholder="llava, gpt-4-vision..."></div>
+                </div>
                 <!-- SCRIPT AI -->
                 <h3 style="font-size:13px; color:var(--cyan); margin-top:24px; margin-bottom:10px;">🧠 Script AI (Viết kịch bản)</h3>
                 <div class="form-group">
@@ -602,6 +626,11 @@
                 <div id="scriptCloudAiSettings" class="settings-section">
                     <div class="form-group"><label>Provider</label><select id="scriptCloudProvider" class="select-input" onchange="loadCloudModels('script')"></select></div>
                     <div class="form-group"><label>Model</label><select id="scriptCloudModel" class="select-input"></select></div>
+                </div>
+                <div id="scriptCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group"><label>Base URL</label><input type="text" id="scriptCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1"></div>
+                    <div class="form-group"><label>API Key</label><input type="password" id="scriptCustomApiKey" class="input" placeholder="Nhập API Key nếu có"></div>
+                    <div class="form-group"><label>Model Name</label><input type="text" id="scriptCustomModel" class="input" placeholder="llama3, gpt-4..."></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -616,6 +645,6 @@
         ⏹ STOP AUTO-PILOT
     </button>
 
-    <script src="/edu-video-studio-static/edu_studio.js"></script>
+    <script src="/edu-video-studio-static/edu_studio.js?v=20260516"></script>
 </body>
 </html>

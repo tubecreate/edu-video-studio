@@ -186,6 +186,7 @@ async def batch_create_project(request: Request):
         "tts_engine": body.get("tts_engine", "edge"),
         "run_mode": "autopilot",
         "video_mode": body.get("video_mode", "multi"),
+        "lang": body.get("lang", "vi"),
         "lesson_count": lesson_count,
         "created_at": now,
         "updated_at": now,

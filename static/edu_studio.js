@@ -11,6 +11,7 @@ let previewPlaying = false;
 let previewAnimId = null;
 let previewTime = 0;
 let previewAudio = null;
+let ttsVoicesCache = [];
 
 // ── Toast Utility ────────────────────────────────────────────────
 function _showToast(msg, type = 'info', duration = 3500) {
@@ -45,7 +46,76 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Setup drag-drop
     setupDragDrop();
+
+    // Init AI badge
+    updateAIStatusBadge();
+
+    // Load voices
+    loadVoices();
 });
+
+// ── TTS Voices ──────────────────────────────────────────────────
+
+async function loadVoices() {
+    try {
+        const res = await fetch('/api/v1/tts/voices');
+        const data = await res.json();
+        if (data.success && data.voices) {
+            ttsVoicesCache = data.voices;
+            
+            let edgeHtml = '<optgroup label="Edge-TTS (Online)">';
+            let vibeHtml = '<optgroup label="VibeVoice (Offline)">';
+            let geminiHtml = '<optgroup label="Gemini (Online via automation)">';
+            
+            ttsVoicesCache.forEach(v => {
+                const langPart = v.language_name || v.language;
+                const namePart = v.name;
+                const genderPart = v.gender ? ` (${v.gender})` : '';
+                const optionHtml = `<option value="${v.id}" data-engine="${v.engine}">${langPart} - ${namePart}${genderPart}</option>`;
+                
+                if (v.engine === 'edge') edgeHtml += optionHtml;
+                else if (v.engine === 'gemini') geminiHtml += optionHtml;
+                else vibeHtml += optionHtml;
+            });
+            
+            edgeHtml += '</optgroup>';
+            vibeHtml += '</optgroup>';
+            geminiHtml += '</optgroup>';
+            
+            const finalHtml = vibeHtml + edgeHtml + geminiHtml;
+            
+        const headerSelect = document.getElementById('voiceSelect');
+        const audioSelect = document.getElementById('audioVoiceSelect');
+        
+        if (headerSelect) {
+            const currentVal = headerSelect.value;
+            headerSelect.innerHTML = finalHtml;
+            if (currentVal && headerSelect.querySelector(`option[value="${currentVal}"]`)) {
+                headerSelect.value = currentVal;
+            }
+            // Bind sync
+            headerSelect.addEventListener('change', function() {
+                if (audioSelect) audioSelect.value = this.value;
+                updateVoice();
+            });
+        }
+        if (audioSelect) {
+            const currentVal = audioSelect.value;
+            audioSelect.innerHTML = finalHtml;
+            if (currentVal && audioSelect.querySelector(`option[value="${currentVal}"]`)) {
+                audioSelect.value = currentVal;
+            }
+            // Bind sync
+            audioSelect.addEventListener('change', function() {
+                if (headerSelect) headerSelect.value = this.value;
+                updateVoice();
+            });
+        }
+    }
+} catch (e) {
+    console.warn('Failed to load TTS voices:', e);
+}
+}
 
 // ── Sidebar & Projects ──────────────────────────────────────────
 
@@ -521,6 +591,7 @@ async function wizardRun() {
                 video_mode: videoMode,
                 voice: document.getElementById('voiceSelect').value,
                 theme: document.getElementById('themeSelect').value,
+                lang: document.getElementById('langSelect')?.value || 'vi',
                 run_mode: runMode,
             })
         });
@@ -947,7 +1018,7 @@ async function analyzeInputAsync() {
     const text = document.getElementById('wizardTextInput')?.value?.trim() 
               || currentLesson.input_text || '';
     const subject = currentLesson.subject || 'auto';
-    const lang = currentProject.lang || 'vi';
+    const lang = currentProject.lang || wizardScanData?.lang || document.getElementById('langSelect')?.value || 'vi';
 
     // UI setup — streamOutput in Raw Content tab
     const streamOutput = document.getElementById('streamOutput');
@@ -1842,14 +1913,18 @@ async function generateAudio() {
             body: JSON.stringify({ script: currentScript }),
         });
 
+        const voiceSelect = document.getElementById('audioVoiceSelect') || document.getElementById('voiceSelect');
+        const selectedOption = voiceSelect.options[voiceSelect.selectedIndex];
+        const engine = selectedOption ? selectedOption.getAttribute('data-engine') : 'edge';
+
         const resp = await fetch(`${API}/generate-audio`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 project_id: currentProject.id,
                 lesson_id: currentLesson.id,
-                voice: document.getElementById('voiceSelect').value,
-                tts_engine: 'edge',
+                voice: voiceSelect.value,
+                tts_engine: engine,
             }),
         });
         const data = await resp.json();
@@ -2019,7 +2094,7 @@ function loadCloudModels(type) {
         'openai': ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
         'gemini': ['gemini-2.5-flash', 'gemini-2.5-pro'],
         'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
-        'deepseek': ['deepseek-chat']
+        'deepseek': ['deepseek-chat', 'deepseek-reasoner']
     };
     if (models[pv]) {
         models[pv].forEach(m => {
@@ -2103,7 +2178,26 @@ function saveAISettings() {
     });
     
     localStorage.setItem('edu_ai_settings', JSON.stringify(settings));
+    updateAIStatusBadge();
     closeAISettingsModal();
+}
+
+function updateAIStatusBadge() {
+    let settings = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
+    const isCloud = (!settings.script || settings.script.source === 'cloud');
+    const textEl = document.getElementById('aiStatusText');
+    const dotEl = document.getElementById('aiStatusDot');
+    if (textEl && dotEl) {
+        if (isCloud) {
+            textEl.textContent = 'Cloud AI';
+            dotEl.style.background = '#10b981';
+            dotEl.style.boxShadow = '0 0 8px #10b981';
+        } else {
+            textEl.textContent = 'Local AI';
+            dotEl.style.background = '#8b5cf6';
+            dotEl.style.boxShadow = '0 0 8px #8b5cf6';
+        }
+    }
 }
 
 // ── Preview Render (Canvas) ─────────────────────────────────────
@@ -2265,30 +2359,35 @@ function _runPreviewFrame(ctx, cvs) {
                 ctx.beginPath(); ctx.moveTo(MX, yOffset + 8); ctx.lineTo(W - MX, yOffset + 8); ctx.stroke();
                 yOffset += 20;
             } else if (el.type === 'image' && el.src) {
-                // Draw cached image or placeholder
-                const imgH = el.height || 480;
-                const imgW = Math.min(el.width || contentW, contentW);
-                const imgX = MX + (contentW - imgW) / 2;
+                const userSize = document.getElementById('wizardChatgptSize')?.value || '1:1';
+                let imgW = contentW;
+                let imgH = userSize === '16:9' ? Math.round(contentW * 9 / 16) : (userSize === '9:16' ? Math.round(contentW * 16 / 9) : contentW);
+                imgH = Math.min(imgH, 500); // Cap max height so it never pushes too much
+
                 const cachedImg = window._PREVIEW_IMG_CACHE && window._PREVIEW_IMG_CACHE[el.src];
                 const imgReady = cachedImg && cachedImg.complete && cachedImg.naturalWidth > 0 && cachedImg.naturalHeight > 0 && !cachedImg._broken;
+                
+                let advanceH = imgH;
                 if (imgReady) {
-                    // Draw image keeping aspect ratio, centered
                     const ratio = Math.min(imgW / cachedImg.naturalWidth, imgH / cachedImg.naturalHeight);
                     const dw = Math.round(cachedImg.naturalWidth * ratio);
                     const dh = Math.round(cachedImg.naturalHeight * ratio);
-                    const dx = Math.round(imgX + (imgW - dw) / 2);
-                    const dy = Math.round(yOffset + (imgH - dh) / 2);
-                    if (dw > 0 && dh > 0) ctx.drawImage(cachedImg, dx, dy, dw, dh);
+                    const dx = Math.round(MX + (contentW - dw) / 2);
+                    if (dw > 0 && dh > 0) ctx.drawImage(cachedImg, dx, yOffset, dw, dh);
+                    advanceH = dh; // Advance only by the drawn height
                 } else {
                     _loadPreviewImage(el.src);
+                    const imgX = MX + (contentW - imgW) / 2;
                     _drawImgPlaceholder(ctx, imgX, yOffset, imgW, imgH, cachedImg ? '⏳ Đang tải...' : '🖼️');
                 }
-                yOffset += imgH + 16;
+                yOffset += advanceH + 16;
                 addedGap = true;
             } else if (el.type === 'image_generation') {
-                // Show placeholder while AutoPilot generates
-                const imgH = el.height || 480;
-                const imgW = Math.min(el.width || contentW, contentW);
+                const userSize = document.getElementById('wizardChatgptSize')?.value || '1:1';
+                let imgW = contentW;
+                let imgH = userSize === '16:9' ? Math.round(contentW * 9 / 16) : (userSize === '9:16' ? Math.round(contentW * 16 / 9) : contentW);
+                imgH = Math.min(imgH, 500); // Cap max height
+                
                 const imgX = MX + (contentW - imgW) / 2;
                 _drawImgPlaceholder(ctx, imgX, yOffset, imgW, imgH, '🤖 AutoPilot đang tạo ảnh...');
                 yOffset += imgH + 16;
