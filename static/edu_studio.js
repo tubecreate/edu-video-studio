@@ -12,6 +12,23 @@ let previewAnimId = null;
 let previewTime = 0;
 let previewAudio = null;
 
+// ── Toast Utility ────────────────────────────────────────────────
+function _showToast(msg, type = 'info', duration = 3500) {
+    const colors = {
+        info:    'linear-gradient(135deg,#2563eb,#1d4ed8)',
+        warning: 'linear-gradient(135deg,#d97706,#b45309)',
+        success: 'linear-gradient(135deg,#059669,#047857)',
+        error:   'linear-gradient(135deg,#dc2626,#991b1b)'
+    };
+    const icons = { info:'ℹ️', warning:'⚠️', success:'✅', error:'❌' };
+    const t = document.createElement('div');
+    t.style.cssText = `position:fixed;bottom:${24 + document.querySelectorAll('.edu-toast').length * 68}px;right:20px;background:${colors[type]||colors.info};color:#fff;padding:11px 16px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:0 4px 20px #0006;z-index:10000;display:flex;align-items:center;gap:10px;max-width:360px;animation:toastIn .25s ease;`;
+    t.className = 'edu-toast';
+    t.innerHTML = `<span style="font-size:1.2rem">${icons[type]||''}</span><span>${msg}</span>`;
+    document.body.appendChild(t);
+    setTimeout(() => { t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(), 300); }, duration);
+}
+
 // ── Init ────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     loadSidebarProjects();
@@ -204,6 +221,10 @@ async function selectLesson(lessonId, autoSwitchTab = true) {
             document.getElementById('stepsContainer').innerHTML = '<div class="empty-state"><span style="font-size:48px; opacity:0.5;">📋</span><p class="text-muted" style="margin-top:10px;">Chưa có kịch bản.</p></div>';
         }
 
+        // ── Refresh Extract + Audio tabs with new lesson data ──
+        refreshExtractTab();
+        updateAudioTab();
+
         // ── Reset Preview tab for this lesson ──
         // Stop any running animation loop from previous lesson
         if (previewAnimId) { cancelAnimationFrame(previewAnimId); previewAnimId = null; }
@@ -268,15 +289,20 @@ function showCreateProject() {
     // Reset wizard to step 1
     wizardFile = null;
     wizardScanData = null;
+    wizardIllustrationMode = 'canvas';
     // Always reset the run button state so it's never stuck disabled
     const runBtn = document.getElementById('wizardRunBtn');
     if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🚀 Tạo và Chạy'; }
     document.getElementById('projTitle').value = '';
     document.getElementById('wizardTextInput').value = '';
     document.getElementById('wizardDropContent').innerHTML = `
-        <div style="font-size:2rem;margin-bottom:8px">📸</div>
-        <div style="font-weight:600">Kéo thả ảnh / PDF vào đây</div>
-        <div class="text-muted" style="font-size:12px;margin-top:4px">hoặc click để chọn file</div>`;
+        <div style="font-size:1.6rem;margin-bottom:4px">📸</div>
+        <div style="font-weight:600;font-size:13px">Kéo thả ảnh / PDF vào đây</div>
+        <div class="text-muted" style="font-size:11px;margin-top:3px">hoặc click để chọn file</div>`;
+    // Reset input tabs to default (img)
+    switchInputTab('img');
+    // Reset illustration mode
+    selectIllustrationMode('canvas');
     // Show step 1
     wizardSetStep(1);
     document.getElementById('projectModal').classList.remove('hidden');
@@ -306,6 +332,27 @@ function selectVideoMode(mode) {
     document.getElementById('vmCardSingle').style.borderColor = mode === 'single' ? 'var(--accent)' : 'var(--border)';
 }
 
+let wizardIllustrationMode = 'canvas'; // 'canvas' | 'chatgpt'
+
+function selectIllustrationMode(mode) {
+    wizardIllustrationMode = mode;
+    document.getElementById('illCardCanvas').style.borderColor = mode === 'canvas' ? 'var(--accent)' : 'var(--border)';
+    document.getElementById('illCardChatgpt').style.borderColor = mode === 'chatgpt' ? 'var(--accent)' : 'var(--border)';
+    const profileRow = document.getElementById('chatgptProfileRow');
+    profileRow.style.display = mode === 'chatgpt' ? 'flex' : 'none';
+    // Update radio
+    document.querySelector(`input[name="illustrationMode"][value="${mode}"]`).checked = true;
+}
+
+function switchInputTab(tab) {
+    const isImg = tab === 'img';
+    document.getElementById('inputPaneImg').style.display = isImg ? 'block' : 'none';
+    document.getElementById('inputPaneText').style.display = isImg ? 'none' : 'block';
+    document.getElementById('inputTabImg').style.background = isImg ? 'var(--accent)' : 'var(--bg-3)';
+    document.getElementById('inputTabImg').style.color = isImg ? '#000' : 'var(--text-2)';
+    document.getElementById('inputTabText').style.background = isImg ? 'var(--bg-3)' : 'var(--accent)';
+    document.getElementById('inputTabText').style.color = isImg ? 'var(--text-2)' : '#000';
+}
 function wizardSetStep(n) {
     [1,2,3].forEach(i => {
         const item = document.getElementById(`wStep${i}`);
@@ -496,7 +543,7 @@ async function wizardRun() {
         }
 
         // 2. Start inline autopilot (reuses existing tab UI)
-        startInlineAutopilot(project, lessons, renderMode);
+        startInlineAutopilot(project, lessons, renderMode, wizardIllustrationMode || 'canvas');
 
     } catch (e) {
         alert('Lỗi tạo project: ' + e.message);
@@ -549,7 +596,162 @@ function stopAutopilot() {
     if (btn) btn.style.display = 'none';
 }
 
-async function startInlineAutopilot(project, lessons, renderMode) {
+/**
+ * Build a ChatGPT illustration prompt for a lesson step.
+ * Uses BOTH lesson title AND step voice_text for keyword matching.
+ */
+function _buildAutoPrompt(lessonTitle, step) {
+    const title = (lessonTitle || '').toLowerCase();
+    const voice = (step && step.voice_text || '').toLowerCase();
+    const combined = title + ' ' + voice; // search both for keywords
+    let concept = '';
+
+    // Math operations
+    if (combined.includes('so sánh') || combined.includes('điền dấu') || combined.includes('lớn hơn') || combined.includes('nhỏ hơn'))
+        concept = 'A simple balance scale icon, left pan heavier than right, minimal flat style';
+    else if (combined.includes('tia số') || combined.includes('dãy số') || combined.includes('số liền'))
+        concept = 'A simple number line with evenly spaced tick marks and arrow, minimal flat icon';
+    else if (combined.includes('nhân') && combined.includes('chia'))
+        concept = 'A simple multiplication and division icon with × and ÷ symbols and equal groups of dots';
+    else if (combined.includes('cộng') || combined.includes('thêm'))
+        concept = 'Two groups of dots with a plus sign merging into one group, simple flat icon';
+    else if (combined.includes('trừ') || combined.includes('bớt'))
+        concept = 'A group of dots with some crossed out showing subtraction, simple flat icon';
+    else if (combined.includes('nhân') || combined.includes('phép nhân'))
+        concept = 'A 3x4 grid of colored dots arranged in equal rows showing multiplication, flat icon';
+    else if (combined.includes('chia') || combined.includes('phép chia'))
+        concept = 'A group of objects split into 3 equal parts with arrows, simple flat division icon';
+    else if (combined.includes('phân tích') || combined.includes('hàng chục') || combined.includes('hàng trăm'))
+        concept = 'Place value columns with blocks: thousands, hundreds, tens, ones, simple flat icon';
+    else if (combined.includes('hình học') || combined.includes('hình chữ nhật') || combined.includes('hình vuông'))
+        concept = 'Simple geometric shapes: square, rectangle, triangle, flat minimal icons on dark background';
+    else if (combined.includes('khối') || combined.includes('lập phương'))
+        concept = 'Simple 3D cube made of unit blocks, isometric flat icon, teal color';
+    // Thematic / story contexts
+    else if (combined.includes('ong') || combined.includes('bướm') || combined.includes('hoa'))
+        concept = 'A simple bee flying toward a flower, minimal flat icon, teal and yellow';
+    else if (combined.includes('xe') || combined.includes('ô tô') || combined.includes('xe tải'))
+        concept = 'A simple flat truck icon carrying boxes, minimal style, teal and yellow';
+    else if (combined.includes('gạo') || combined.includes('lúa') || combined.includes('thóc'))
+        concept = 'A simple rice bag icon with arrow dividing into portions, minimal flat style';
+    else if (combined.includes('cá') || combined.includes('ao') || combined.includes('hồ'))
+        concept = 'Simple fish icons in a pond, minimal flat style, teal and yellow';
+    else if (combined.includes('táo') || combined.includes('cam') || combined.includes('quả'))
+        concept = 'Simple fruit icons arranged in groups, minimal flat style';
+    else if (combined.includes('học sinh') || combined.includes('lớp') || combined.includes('trường'))
+        concept = 'Simple student desk and pencil icons, minimal flat educational style';
+    else if (combined.includes('số chẵn') || combined.includes('số lẻ'))
+        concept = 'Numbers 1 through 6 where even numbers are highlighted in teal, odd in yellow, simple flat style';
+    else if (combined.includes('tính nhẩm') || combined.includes('nhẩm'))
+        concept = 'A simple brain icon with math symbols + - × ÷ around it, flat minimal style';
+    else if (combined.includes('lời văn') || combined.includes('bài toán'))
+        concept = 'A simple magnifying glass over math equation, flat minimal icon';
+    else {
+        // Fallback: summarize from voice_text snippet
+        const snippet = (step && step.voice_text || lessonTitle || 'math').substring(0, 80);
+        concept = `Simple educational icon for: "${snippet}", minimal flat icon style, single concept`;
+    }
+
+    return `${concept}. Teal and yellow accent colors, dark background, simple minimal flat art.`;
+}
+
+/**
+ * Score how much canvas space a step has available (higher = more space).
+ * Returns -1 if the step should not receive an illustration.
+ */
+function _scoreStepSpace(step) {
+    const els = step.elements || [];
+    // Already has image-related element — skip
+    if (els.some(e => e.type === 'image_generation' || (e.type === 'image' && e.src))) return -1;
+    // math_calc and geometry elements dominate the canvas — skip
+    if (els.some(e => ['math_calc', 'point', 'segment', 'right_angle'].includes(e.type))) return -1;
+    // Result/conclusion steps — skip
+    if (els.some(e => e.type === 'box' && e.style === 'result')) return -1;
+    // Score by element count (fewer = more space)
+    const count = els.length;
+    if (count === 0) return 100;
+    if (count === 1) return 85;
+    if (count === 2) return 60;
+    if (count === 3) return 25;
+    return -1; // 4+ elements: too full
+}
+
+/**
+ * Fallback: if script has NO image_generation elements, inject into all steps
+ * that have enough canvas space. Uses space scoring — not limited to 1 step.
+ * Returns number of steps injected.
+ */
+async function autoInjectIllustration(lessonTitle) {
+    if (!currentScript || !currentScript.steps || currentScript.steps.length === 0) return 0;
+    const steps = currentScript.steps;
+
+    // Already has image_generation or image elements — AI already decided placements
+    const hasAny = steps.some(s =>
+        (s.elements||[]).some(e => e.type === 'image_generation' || (e.type === 'image' && e.src)));
+    if (hasAny) return 0;
+
+    // Score each step and inject into all qualifying steps
+    let injectedCount = 0;
+    steps.forEach((step, idx) => {
+        const score = _scoreStepSpace(step);
+        if (score < 0) return; // no space or not suitable
+
+        const prompt = _buildAutoPrompt(lessonTitle, step);
+
+        // Image step must be isolated: clear:true so it gets its own screen
+        // Keep clear:false on next step so image stays as visual context for following content
+        step.clear = true;
+        step.elements = [{
+            type: 'image_generation',
+            prompt: prompt,
+            auto_injected: true
+        }];
+
+        injectedCount++;
+    });
+
+    if (injectedCount === 0) return 0;
+
+    // Save to disk
+    try {
+        await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script: currentScript }),
+        });
+    } catch (_) { /* non-fatal */ }
+
+    refreshExtractTab();
+    return injectedCount;
+}
+
+/**
+ * Remove auto-injected (or failed) image_generation elements and save.
+ * Called when image gen fails to prevent blocking generateAudio().
+ */
+async function cleanupFailedImageGen() {
+    if (!currentScript || !currentScript.steps) return;
+    let changed = false;
+    currentScript.steps.forEach(s => {
+        const before = (s.elements || []).length;
+        s.elements = (s.elements || []).filter(e =>
+            e.type !== 'image_generation' ||
+            (e.type === 'image_generation' && false) // remove all pending image_gen
+        ).filter(e => e.type !== 'image_generation');
+        if (s.elements.length !== before) changed = true;
+    });
+    if (changed) {
+        try {
+            await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ script: currentScript }),
+            });
+        } catch (_) { }
+    }
+}
+
+async function startInlineAutopilot(project, lessons, renderMode, illustrationMode = 'canvas') {
     autopilotRunning = true;
     const total = lessons.length;
     
@@ -596,13 +798,68 @@ async function startInlineAutopilot(project, lessons, renderMode) {
 
         if (!autopilotRunning) break;
 
-        // ── 3. Script created → switch to Script tab ──────────────
+        // ── 3. Script created → show Script tab so user can see it ────
         switchTab('script');
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 1200)); // give Script tab time to fully render
+
+        // Re-fetch script from server to ensure backend has fully saved it
+        try {
+            const freshLesson = await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`);
+            const freshData = await freshLesson.json();
+            const freshScript = freshData.lesson?.script || freshData.script;
+            if (freshScript && freshScript.steps?.length > 0) {
+                currentScript = freshScript;
+                renderScriptUI(currentScript);
+            }
+        } catch (_) { /* non-fatal — use in-memory script */ }
+
+        if (!autopilotRunning) break;
+
+        // ── 3b. Generate Images (Extract step) ────────────────────────
+        const injected = await autoInjectIllustration(lesson.title);
+        if (injected > 0) {
+            showAutopilotToast(idx, total, `🎨 ${lesson.title} — Đã chèn ${injected} ảnh minh họa tự động...`, Math.round(((idx + 0.32) / total) * 100));
+            await new Promise(r => setTimeout(r, 600));
+        }
+
+        const pendingImgSteps = (currentScript.steps || []).filter(s =>
+            (s.elements || []).some(e => e.type === 'image_generation') &&
+            !(s.elements || []).some(e => e.type === 'image' && e.src)
+        );
+
+        if (pendingImgSteps.length > 0 && illustrationMode === 'chatgpt') {
+            // ChatGPT mode: generate real images via browser automation
+            showAutopilotToast(idx, total, `🎨 ${lesson.title} — Tạo ${pendingImgSteps.length} ảnh minh họa...`, Math.round(((idx + 0.35) / total) * 100));
+            await new Promise(r => setTimeout(r, 800));
+            switchTab('extract');
+            await new Promise(r => setTimeout(r, 500));
+            try {
+                await batchGenerateImages();
+            } catch (e) {
+                showAutopilotToast(idx, total, `⚠️ ${lesson.title} — Lỗi tạo ảnh, tiếp tục...`, 0);
+            }
+            const stillPending = (currentScript.steps || []).filter(s =>
+                (s.elements || []).some(e => e.type === 'image_generation') &&
+                !(s.elements || []).some(e => e.type === 'image' && e.src)
+            );
+            if (stillPending.length > 0) {
+                showAutopilotToast(idx, total, `⚠️ ${lesson.title} — ${stillPending.length} ảnh chưa tạo được, bỏ qua để tạo voice...`, 0);
+                await cleanupFailedImageGen();
+            }
+        } else if (pendingImgSteps.length > 0 && illustrationMode !== 'chatgpt') {
+            // Canvas mode: image_generation elements stay as placeholders (rendered by canvas)
+            showAutopilotToast(idx, total, `🖼️ ${lesson.title} — Chế độ canvas, bỏ qua tạo ảnh ChatGPT...`, Math.round(((idx + 0.35) / total) * 100));
+            await new Promise(r => setTimeout(r, 400));
+        } else {
+            showAutopilotToast(idx, total, `⏩ ${lesson.title} — Không có ảnh cần tạo, bỏ qua...`, Math.round(((idx + 0.35) / total) * 100));
+        }
+
+        if (!autopilotRunning) break;
 
         // ── 4. Generate Audio ─────────────────────────────────────
         if (!hasTiming) {
             showAutopilotToast(idx, total, `🎙️ ${lesson.title} — Tạo giọng nói...`, Math.round(((idx + 0.4) / total) * 100));
+            switchTab('audio');
             try {
                 await generateAudio();
             } catch (e) {
@@ -730,6 +987,18 @@ async function analyzeInputAsync() {
 
             const aiSettings = JSON.parse(localStorage.getItem('edu_ai_settings') || '{}');
             formData.append('ai_settings', JSON.stringify(aiSettings));
+            formData.append('illustration_mode', wizardIllustrationMode || 'canvas');
+            if (wizardIllustrationMode === 'chatgpt') {
+                const profile = document.getElementById('wizardChatgptProfile')?.value || 'youtube6';
+                const size = document.getElementById('wizardChatgptSize')?.value || '1:1';
+                formData.append('chatgpt_profile', profile);
+                formData.append('size', size);
+            }
+            // Tell backend NOT to auto-start image generation when inline autopilot is running
+            // (frontend autopilot handles it via batchGenerateImages to avoid duplicate browser opens)
+            if (autopilotRunning) {
+                formData.append('skip_auto_pilot', 'true');
+            }
 
             const resp = await fetch(`${API}/analyze-stream`, {
                 method: 'POST',
@@ -795,6 +1064,11 @@ async function analyzeInputAsync() {
                             }
 
                             if (btnManual) btnManual.disabled = false;
+                            // Only start backend polling when NOT in inline autopilot mode
+                            // (inline autopilot handles image gen itself via batchGenerateImages)
+                            if (ev.auto_pilot && ev.autopilot_job_id && !autopilotRunning) {
+                                startAutoPilotPolling(ev.autopilot_job_id);
+                            }
                             resolve(currentScript);
                             return;
                         } else if (ev.type === 'error') {
@@ -945,6 +1219,9 @@ function switchTab(tabName) {
     const panel = document.getElementById(`panel-${tabName}`);
     if (tabBtn) tabBtn.classList.add('active');
     if (panel) panel.classList.add('active');
+    // Tab-specific hooks
+    if (tabName === 'extract') refreshExtractTab();
+    if (tabName === 'audio') updateAudioTab();
 }
 
 function streamSetStep(stepNum) {
@@ -1050,6 +1327,14 @@ function openStepEdit(stepIdx) {
     document.getElementById('editVoiceText').value = step.voice_text || '';
     document.getElementById('editElementsJson').value = JSON.stringify(step.elements || [], null, 2);
     document.getElementById('editJsonError').style.display = 'none';
+    
+    // Auto-fill chatgptPrompt: use image_generation.prompt if set, else build default from voice_text
+    const _imgGen = (step.elements || []).find(e => e.type === 'image_generation');
+    let p = (_imgGen && _imgGen.prompt)
+        ? _imgGen.prompt
+        : 'Vẽ lại hình minh họa giáo dục này theo phong cách vector 2D, tuyệt đối không chèn chữ, nền tối.' + (step.voice_text ? ' Nội dung: ' + step.voice_text : '');
+    document.getElementById('chatgptPrompt').value = p;
+
 
     const modal = document.getElementById('stepEditModal');
     modal.style.display = 'flex';
@@ -1062,6 +1347,76 @@ function closeStepEdit() {
     document.getElementById('stepEditModal').style.display = 'none';
     _editingStepIdx = -1;
 }
+
+async function generateChatGPTImage() {
+    if (_editingStepIdx < 0 || !currentProject || !currentLesson) return;
+    const prompt = document.getElementById('chatgptPrompt').value.trim();
+    if (!prompt) return alert('Vui lòng nhập prompt');
+    
+    const profile = document.getElementById('chatgptProfile').value;
+    const size = document.getElementById('chatgptSize').value;
+    const btn = document.getElementById('btnGenerateChatGPT');
+    const spinner = document.getElementById('chatgptSpinner');
+    
+    btn.disabled = true;
+    spinner.style.display = 'block';
+    const oldText = btn.lastChild.nodeValue;
+    btn.lastChild.nodeValue = ' Đang gửi yêu cầu...';
+    
+    try {
+        const res = await fetch(`${API}/generate-image-chatgpt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: currentProject.id,
+                lesson_id: currentLesson.id,
+                step_idx: _editingStepIdx,
+                prompt: prompt,
+                profile: profile,
+                size: size
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Lỗi API');
+        
+        // Poll status
+        const jobId = data.job_id;
+        while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const statRes = await fetch(`${API}/status/${jobId}`);
+            const stat = await statRes.json();
+            btn.lastChild.nodeValue = ` ${stat.message || stat.progress + '%'}`;
+            
+            if (stat.status === 'done') {
+                // Reload lesson script from server
+                const scriptRes = await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`);
+                const scriptData = await scriptRes.json();
+                currentScript = scriptData.lesson?.script || scriptData.script || currentScript;
+
+                // Update textarea with new elements
+                if (currentScript?.steps?.[_editingStepIdx]) {
+                    document.getElementById('editElementsJson').value =
+                        JSON.stringify(currentScript.steps[_editingStepIdx].elements, null, 2);
+                }
+
+                // Refresh script card view
+                renderScriptUI(currentScript);
+
+                _showToast('✅ Tạo ảnh thành công! Đã chèn vào Elements.', 'success', 4000);
+                break;
+            } else if (stat.status === 'error') {
+                throw new Error(stat.message);
+            }
+        }
+    } catch (e) {
+        alert('Lỗi tạo ảnh: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        spinner.style.display = 'none';
+        btn.lastChild.nodeValue = oldText;
+    }
+}
+
 
 async function saveStepEdit() {
     if (_editingStepIdx < 0 || !currentScript) return;
@@ -1128,6 +1483,322 @@ function copyRawContent() {
     alert('Đã copy!');
 }
 
+// ── Extract Tab ─────────────────────────────────────────────────
+
+let _batchImgRunning = false;
+
+/**
+ * Re-render the Extract tab step list based on currentScript.
+ * Shows per-step image status + individual gen buttons.
+ */
+function refreshExtractTab() {
+    const listEl = document.getElementById('extractStepList');
+    if (!listEl) return;
+    if (!currentScript || !currentScript.steps || currentScript.steps.length === 0) {
+        listEl.innerHTML = `<div class="empty-state"><span style="font-size:32px;opacity:0.4;">🎨</span><p class="text-muted" style="margin-top:8px;font-size:12px;">Chưa có script. Hãy tạo script trước.</p></div>`;
+        return;
+    }
+
+    const steps = currentScript.steps;
+    listEl.innerHTML = '';
+
+    let pendingCount = 0;
+    let imageStepCount = 0;
+
+    // First pass: count how many steps have image_generation or image
+    steps.forEach(s => {
+        const els = s.elements || [];
+        if (els.some(e => e.type === 'image_generation') || els.some(e => e.type === 'image' && e.src)) {
+            imageStepCount++;
+        }
+    });
+
+    // If script has NO illustration markers at all → show a banner + all steps (optional mode)
+    const optionalMode = imageStepCount === 0;
+    if (optionalMode) {
+        listEl.innerHTML = `<div style="background:rgba(100,181,246,0.07);border:1px solid rgba(100,181,246,0.25);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start;">
+            <span style="font-size:1.4rem;">ℹ️</span>
+            <div>
+                <div style="font-weight:700;font-size:13px;margin-bottom:3px;">Script chưa có ảnh minh họa được đánh dấu</div>
+                <div style="font-size:11px;color:var(--text-3);">Script này được tạo ở chế độ Canvas. Bạn có thể thêm ảnh minh họa tùy chọn cho bất kỳ step nào, hoặc tạo lại script với chế độ <strong>Ảnh ChatGPT</strong>.</div>
+            </div>
+        </div>`;
+    }
+
+    steps.forEach((step, idx) => {
+        const els = step.elements || [];
+        const hasImageGen = els.some(e => e.type === 'image_generation');
+        const hasImage    = els.some(e => e.type === 'image' && e.src);
+        const imgEl       = els.find(e => e.type === 'image' && e.src);
+        const imgGenEl    = els.find(e => e.type === 'image_generation');
+
+        // In normal mode: skip pure Canvas steps
+        if (!optionalMode && !hasImageGen && !hasImage) return;
+
+        let statusBadge, statusColor, borderColor;
+        if (hasImage) {
+            statusBadge = '✅ Đã có ảnh';
+            statusColor = 'rgba(0,255,136,0.07)';
+            borderColor = 'rgba(0,255,136,0.25)';
+        } else if (hasImageGen) {
+            statusBadge = '⏳ Chưa tạo ảnh';
+            statusColor = 'rgba(251,191,36,0.07)';
+            borderColor = 'rgba(251,191,36,0.25)';
+            pendingCount++;
+        } else {
+            // optionalMode — canvas step, can optionally get image
+            statusBadge = '📝 Tùy chọn';
+            statusColor = 'transparent';
+            borderColor = 'var(--border)';
+        }
+
+        // Thumbnail or placeholder
+        const thumbHtml = hasImage && imgEl ? `
+            <div style="flex-shrink:0;cursor:pointer;" onclick="window.open('${imgEl.src}','_blank')" title="Xem ảnh đầy đủ">
+                <img src="${imgEl.src}"
+                    style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,255,136,0.4);display:block;"
+                    onerror="this.style.display='none'" loading="lazy">
+            </div>` : `
+            <div style="flex-shrink:0;width:80px;height:80px;border-radius:8px;border:2px dashed rgba(251,191,36,0.35);display:flex;align-items:center;justify-content:center;background:rgba(251,191,36,0.05);">
+                <span style="font-size:28px;opacity:0.45;">🎨</span>
+            </div>`;
+
+        const card = document.createElement('div');
+        card.id = `extract-step-${idx}`;
+        card.style.cssText = `background:${statusColor};border:1px solid ${borderColor};border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:12px;transition:background .2s;`;
+        card.innerHTML = `
+            ${thumbHtml}
+            <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+                    <span style="min-width:24px;height:24px;border-radius:50%;background:var(--bg-2);display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--text-2);">${step.id || idx+1}</span>
+                    <span style="border:1px solid ${borderColor};border-radius:4px;padding:1px 8px;font-size:10px;font-weight:600;">${statusBadge}</span>
+                    ${hasImage && imgEl ? `<span style="color:var(--text-3);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${imgEl.src.split('/').pop()}</span>` : ''}
+                </div>
+                <div style="font-size:12px;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml((step.voice_text || '').substring(0, 100))}${(step.voice_text||'').length > 100 ? '…' : ''}</div>
+                ${imgGenEl && imgGenEl.prompt ? `<div style="font-size:10px;color:var(--text-3);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Prompt: ${_escHtml((imgGenEl.prompt||'').substring(0,80))}</div>` : ''}
+            </div>
+            <div style="flex-shrink:0;display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+                ${(!hasImage) ? `
+                <button onclick="extractSingleStep(${idx})" id="btnExtract-${idx}"
+                    style="background:var(--accent);color:#000;border:none;border-radius:7px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
+                    🎨 Tạo ảnh
+                </button>` : `
+                <button onclick="reExtractStep(${idx})" title="Tạo lại ảnh mới"
+                    style="background:none;border:1px solid var(--border);color:var(--text-2);border-radius:7px;padding:5px 10px;font-size:10px;cursor:pointer;white-space:nowrap;">
+                    🔄 Tạo lại
+                </button>`}
+            </div>
+        `;
+        listEl.appendChild(card);
+    });
+
+    // Update batch button
+    const batchBtn = document.getElementById('btnBatchGenImages');
+    if (batchBtn) {
+        if (imageStepCount === 0) {
+            batchBtn.textContent = '📝 Không có ảnh cần tạo';
+            batchBtn.disabled = true;
+        } else if (pendingCount > 0) {
+            batchBtn.textContent = `✨ Tạo ${pendingCount} ảnh còn thiếu`;
+            batchBtn.disabled = false;
+        } else {
+            batchBtn.textContent = `✅ Tất cả ${imageStepCount} ảnh đã có`;
+            batchBtn.disabled = true;
+        }
+    }
+}
+
+/** Re-generate image for a step that already has one */
+async function reExtractStep(stepIdx) {
+    if (!currentScript) return;
+    // Temporarily remove existing image so extractSingleStep will treat it as pending
+    const step = currentScript.steps[stepIdx];
+    // Find and mark image_generation if not present — if only image el exists, add flag
+    const els = step.elements || [];
+    const imgIdx = els.findIndex(e => e.type === 'image' && e.src);
+    if (imgIdx >= 0) {
+        // Replace image el with image_generation placeholder so extractSingleStep picks it up
+        const old = els[imgIdx];
+        els[imgIdx] = { type: 'image_generation', prompt: `Vẽ lại hình minh họa giáo dục theo phong cách vector 2D, không chèn chữ, nền tối. Nội dung: ${step.voice_text || ''}` };
+        refreshExtractTab();
+        // extractSingleStep will replace it back with new image
+        await extractSingleStep(stepIdx);
+        // if failed, restore
+        if (!(step.elements || []).some(e => e.type === 'image' && e.src)) {
+            step.elements[imgIdx] = old;
+            refreshExtractTab();
+        }
+    }
+}
+
+function _escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/** Extract image for a single step by index */
+async function extractSingleStep(stepIdx, _retryCount = 0) {
+    if (!currentProject || !currentLesson || !currentScript) return;
+    const step = currentScript.steps[stepIdx];
+    const imgGenEl = (step.elements || []).find(e => e.type === 'image_generation');
+    if (!imgGenEl) return;
+
+    const btn = document.getElementById(`btnExtract-${stepIdx}`);
+    const cardEl = document.getElementById(`extract-step-${stepIdx}`);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tạo...'; }
+
+    const profile = document.getElementById('wizardChatgptProfile')?.value || 'youtube6';
+    const size = document.getElementById('wizardChatgptSize')?.value || '1:1';
+    let prompt = 'Simple educational illustration, minimal flat icon style, dark background.';
+    if (imgGenEl.prompt) prompt = imgGenEl.prompt;
+    else if (step.voice_text) prompt += ' Context: ' + step.voice_text.substring(0, 100);
+
+    try {
+        const res = await fetch(`${API}/generate-image-chatgpt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_id: currentProject.id, lesson_id: currentLesson.id, step_idx: stepIdx, prompt, profile, size }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+        const jobId = data.job_id;
+        const TIMEOUT_MS = 90_000; // 90 seconds max per image
+        const startPoll = Date.now();
+
+        while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Timeout guard
+            if (Date.now() - startPoll > TIMEOUT_MS) {
+                throw new Error('Timeout sau 90 giây — ChatGPT không phản hồi');
+            }
+
+            const sr = await fetch(`${API}/status/${jobId}`);
+            const stat = await sr.json();
+            if (btn) btn.textContent = `⏳ ${stat.progress || 0}%`;
+
+            if (stat.status === 'done') {
+                const scriptRes = await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`);
+                const scriptData = await scriptRes.json();
+                currentScript = scriptData.lesson?.script || scriptData.script || currentScript;
+                renderScriptUI(currentScript);
+                refreshExtractTab();
+                if (cardEl) cardEl.style.background = 'rgba(0,255,136,0.12)';
+                _showToast(`✅ Step ${stepIdx+1}: Đã tạo ảnh`, 'success', 3000);
+                break;
+            } else if (stat.status === 'error') {
+                throw new Error(stat.message || 'ChatGPT failed to generate image');
+            }
+        }
+    } catch(e) {
+        // Auto-retry once on failure
+        if (_retryCount === 0) {
+            console.warn(`Step ${stepIdx+1} image gen failed, retrying...`, e.message);
+            if (btn) btn.textContent = '🔄 Thử lại...';
+            await new Promise(r => setTimeout(r, 3000));
+            return extractSingleStep(stepIdx, 1);
+        }
+        _showToast(`❌ Step ${stepIdx+1}: ${e.message}`, 'error', 5000);
+        if (btn) { btn.disabled = false; btn.textContent = '🎨 Tạo ảnh'; }
+        if (cardEl) cardEl.style.background = 'rgba(255,80,80,0.08)';
+        throw e; // re-throw so batchGenerateImages can handle
+    }
+}
+
+/** Batch generate images for all pending image_generation steps */
+async function batchGenerateImages() {
+    if (!currentScript || !currentProject || !currentLesson) {
+        _showToast('Chưa có script để xử lý.', 'warning'); return;
+    }
+    const pendingIdxs = [];
+    currentScript.steps.forEach((s, i) => {
+        const els = s.elements || [];
+        if (els.some(e => e.type === 'image_generation') && !els.some(e => e.type === 'image' && e.src)) {
+            pendingIdxs.push(i);
+        }
+    });
+    if (pendingIdxs.length === 0) {
+        _showToast('Tất cả step đều đã có ảnh! ✅', 'success'); return;
+    }
+
+    _batchImgRunning = true;
+    const statusEl = document.getElementById('batchImgStatus');
+    const msgEl = document.getElementById('batchImgMsg');
+    const progEl = document.getElementById('batchImgProgress');
+    const batchBtn = document.getElementById('btnBatchGenImages');
+    statusEl.style.display = 'block';
+    if (batchBtn) batchBtn.disabled = true;
+
+    for (let k = 0; k < pendingIdxs.length; k++) {
+        if (!_batchImgRunning) break;
+        const idx = pendingIdxs[k];
+        const pct = Math.round((k / pendingIdxs.length) * 100);
+        msgEl.textContent = `🎨 Đang tạo step ${idx+1} (${k+1}/${pendingIdxs.length})...`;
+        progEl.style.width = pct + '%';
+        try {
+            await extractSingleStep(idx);
+        } catch(e) {
+            _showToast(`Step ${idx+1} lỗi: ${e.message}`, 'error', 3000);
+        }
+        await new Promise(r => setTimeout(r, 800));
+    }
+
+    progEl.style.width = '100%';
+    msgEl.textContent = `✅ Hoàn tất ${pendingIdxs.length} ảnh!`;
+    setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
+    if (batchBtn) batchBtn.disabled = false;
+    _batchImgRunning = false;
+    _showToast('✅ Đã tạo xong tất cả ảnh!', 'success', 4000);
+}
+
+function stopBatchImages() {
+    _batchImgRunning = false;
+    document.getElementById('batchImgStatus').style.display = 'none';
+    _showToast('⏹ Đã dừng tạo ảnh.', 'info');
+}
+
+// ── Audio Tab ────────────────────────────────────────────────────
+
+/** Update Audio tab info when navigating to it */
+function updateAudioTab() {
+    if (!currentScript) {
+        const info = document.getElementById('audioScriptInfo');
+        if (info) info.textContent = 'Chưa có script';
+        return;
+    }
+    const steps = currentScript.steps || [];
+    const pending = steps.filter(s => (s.elements||[]).some(e => e.type === 'image_generation') && !(s.elements||[]).some(e => e.type === 'image' && e.src)).length;
+
+    // Show/hide warning
+    const warn = document.getElementById('audioImgWarning');
+    const warnCount = document.getElementById('audioImgWarnCount');
+    if (warn) warn.style.display = pending > 0 ? 'block' : 'none';
+    if (warnCount) warnCount.textContent = pending;
+
+    // Script info
+    const info = document.getElementById('audioScriptInfo');
+    if (info) {
+        info.textContent = `${steps.length} steps | ${pending > 0 ? pending + ' step chưa có ảnh' : 'Đã có đủ ảnh ✅'}`;
+    }
+
+    // Timing info
+    const timingInfo = document.getElementById('audioTimingInfo');
+    const timingDetail = document.getElementById('audioTimingDetail');
+    if (currentTiming && timingInfo) {
+        timingInfo.style.display = 'block';
+        if (timingDetail) timingDetail.textContent = `${currentTiming.steps.length} steps | ${currentTiming.total_duration?.toFixed(1)}s tổng thời lượng`;
+    } else if (timingInfo) {
+        timingInfo.style.display = 'none';
+    }
+
+    // Sync voice select
+    const headerVoice = document.getElementById('voiceSelect');
+    const audioVoice = document.getElementById('audioVoiceSelect');
+    if (headerVoice && audioVoice && !audioVoice._synced) {
+        audioVoice.value = headerVoice.value;
+        audioVoice.addEventListener('change', () => { if (headerVoice) headerVoice.value = audioVoice.value; });
+        audioVoice._synced = true;
+    }
+}
+
 // ── Generate Audio ──────────────────────────────────────────────
 
 async function generateAudio() {
@@ -1135,10 +1806,30 @@ async function generateAudio() {
         alert('Chưa có kịch bản.'); return;
     }
 
+    // ── Hard check: tất cả ảnh image_generation phải hoàn thành trước khi tạo voice ──
+    const pendingImages = (currentScript.steps || []).filter(s =>
+        (s.elements || []).some(e => e.type === 'image_generation') &&
+        !(s.elements || []).some(e => e.type === 'image' && e.src)
+    );
+    if (pendingImages.length > 0) {
+        // Show blocking error in Audio tab
+        const warn = document.getElementById('audioImgWarning');
+        const warnCount = document.getElementById('audioImgWarnCount');
+        if (warn) warn.style.display = 'block';
+        if (warnCount) warnCount.textContent = pendingImages.length;
+        _showToast(`⚠️ Còn ${pendingImages.length} ảnh chưa tạo — hãy vào tab Extract tạo ảnh trước!`, 'error', 5000);
+        throw new Error(`Còn ${pendingImages.length} step chưa có ảnh minh họa`);
+    }
+
     const statusEl = document.getElementById('audioStatus');
     const msgEl = document.getElementById('audioMsg');
     const progressEl = document.getElementById('audioProgress');
-    const btn = document.getElementById('btnGenAudio');
+    // Support both old (btnGenAudio in script tab) and new (btnGenAudio2 in audio tab)
+    const btn = document.getElementById('btnGenAudio2') || document.getElementById('btnGenAudio');
+    // Sync voice from audio tab select if available
+    const audioVoice = document.getElementById('audioVoiceSelect');
+    const headerVoice = document.getElementById('voiceSelect');
+    if (audioVoice && headerVoice) headerVoice.value = audioVoice.value;
 
     statusEl.classList.remove('hidden');
     btn.disabled = true;
@@ -1427,7 +2118,8 @@ const THEMES = {
 function togglePreview() {
     if (!currentScript || !currentTiming) { alert('Cần kịch bản và voice trước.'); return; }
     if (currentScript.steps.length !== currentTiming.steps.length) {
-        alert('⚠️ Script và Voice không khớp. Hãy tạo lại Voice.'); return;
+        // Show non-blocking warning toast instead of blocking alert
+        _showToast('⚠️ Script và Voice không khớp — hãy tạo lại Voice để đồng bộ âm thanh.', 'warning', 5000);
     }
     
     previewPlaying = !previewPlaying;
@@ -1456,9 +2148,22 @@ function togglePreview() {
 function runPreview() {
     if (!previewPlaying) return;
     const cvs = document.getElementById('previewCanvas'), ctx = cvs.getContext('2d');
+    try {
+        _runPreviewFrame(ctx, cvs);
+    } catch(err) {
+        console.error('[Preview] render error:', err);
+    }
+    // Always schedule next frame if still playing
+    if (previewPlaying) {
+        previewAnimId = requestAnimationFrame(runPreview);
+    }
+}
+
+function _runPreviewFrame(ctx, cvs) {
     const th = THEMES[document.getElementById('themeSelect').value] || THEMES.dark;
     const totalDur = currentTiming.total_duration || 30;
     const steps = currentScript.steps, tSteps = currentTiming.steps;
+    const safeLen = Math.min(steps.length, tSteps.length); // handle mismatch gracefully
     const W = 1080, H = 1920, MX = 60, contentW = W - MX * 2;
 
     const g = ctx.createLinearGradient(0, 0, W, H);
@@ -1496,10 +2201,11 @@ function runPreview() {
 
     // Determine current step index
     let curStepIdx = 0;
-    for (let i = 0; i < tSteps.length; i++) {
+    for (let i = 0; i < safeLen; i++) {
         if (previewTime >= tSteps[i].start && previewTime <= tSteps[i].end) { curStepIdx = i; break; }
         if (previewTime > tSteps[i].end) curStepIdx = i;
     }
+    if (curStepIdx >= safeLen) curStepIdx = safeLen - 1;
 
     // ── Find render start (last clear:true step at or before curStepIdx) ──
     let renderFrom = 0;
@@ -1558,6 +2264,35 @@ function runPreview() {
                 ctx.strokeStyle = th.hl + '66'; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(MX, yOffset + 8); ctx.lineTo(W - MX, yOffset + 8); ctx.stroke();
                 yOffset += 20;
+            } else if (el.type === 'image' && el.src) {
+                // Draw cached image or placeholder
+                const imgH = el.height || 480;
+                const imgW = Math.min(el.width || contentW, contentW);
+                const imgX = MX + (contentW - imgW) / 2;
+                const cachedImg = window._PREVIEW_IMG_CACHE && window._PREVIEW_IMG_CACHE[el.src];
+                const imgReady = cachedImg && cachedImg.complete && cachedImg.naturalWidth > 0 && cachedImg.naturalHeight > 0 && !cachedImg._broken;
+                if (imgReady) {
+                    // Draw image keeping aspect ratio, centered
+                    const ratio = Math.min(imgW / cachedImg.naturalWidth, imgH / cachedImg.naturalHeight);
+                    const dw = Math.round(cachedImg.naturalWidth * ratio);
+                    const dh = Math.round(cachedImg.naturalHeight * ratio);
+                    const dx = Math.round(imgX + (imgW - dw) / 2);
+                    const dy = Math.round(yOffset + (imgH - dh) / 2);
+                    if (dw > 0 && dh > 0) ctx.drawImage(cachedImg, dx, dy, dw, dh);
+                } else {
+                    _loadPreviewImage(el.src);
+                    _drawImgPlaceholder(ctx, imgX, yOffset, imgW, imgH, cachedImg ? '⏳ Đang tải...' : '🖼️');
+                }
+                yOffset += imgH + 16;
+                addedGap = true;
+            } else if (el.type === 'image_generation') {
+                // Show placeholder while AutoPilot generates
+                const imgH = el.height || 480;
+                const imgW = Math.min(el.width || contentW, contentW);
+                const imgX = MX + (contentW - imgW) / 2;
+                _drawImgPlaceholder(ctx, imgX, yOffset, imgW, imgH, '🤖 AutoPilot đang tạo ảnh...');
+                yOffset += imgH + 16;
+                addedGap = true;
             }
             // box, arrow, math_calc etc — skip without adding yOffset
         }
@@ -1647,9 +2382,110 @@ function runPreview() {
         previewPlaying = false;
         document.getElementById('btnPlay').textContent = '▶️ Play';
         if (previewAudio) previewAudio.pause();
-    } else {
-        previewAnimId = requestAnimationFrame(runPreview);
     }
+    // Note: requestAnimationFrame is scheduled in runPreview() wrapper above
+}
+
+// ── Preview Image Cache ──────────────────────────────────────────
+window._PREVIEW_IMG_CACHE = window._PREVIEW_IMG_CACHE || {};
+
+function _loadPreviewImage(src) {
+    if (window._PREVIEW_IMG_CACHE[src]) return; // already loading or loaded
+    const img = new Image();
+    window._PREVIEW_IMG_CACHE[src] = img;
+    img.onload = () => {
+        // Only force a single redraw if the preview is currently paused
+        if (!previewPlaying && currentTiming) {
+            const c = document.getElementById('previewCanvas');
+            if (c) {
+                previewPlaying = true;
+                try { _runPreviewFrame(c.getContext('2d'), c); } catch(e) {}
+                previewPlaying = false;
+            }
+        }
+    };
+    img.onerror = () => { img._broken = true; };
+    img.src = src;
+}
+
+function _drawImgPlaceholder(ctx, x, y, w, h, label) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(30,30,60,0.7)';
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, 16);
+    else ctx.rect(x, y, w, h);
+    ctx.fill();
+    ctx.strokeStyle = '#7c3aed55'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.font = 'bold 36px sans-serif'; ctx.fillStyle = '#a78bfa';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label || '🖼️', x + w/2, y + h/2);
+    ctx.restore();
+}
+
+// ── AutoPilot Job Polling ────────────────────────────────────────
+let _autopilotPollTimer = null;
+
+function startAutoPilotPolling(jobId) {
+    if (_autopilotPollTimer) clearInterval(_autopilotPollTimer);
+    
+    // Show banner
+    const banner = document.createElement('div');
+    banner.id = 'autopilotBanner';
+    banner.style.cssText = 'position:fixed;bottom:20px;right:20px;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:0 4px 20px #0006;z-index:9999;display:flex;align-items:center;gap:10px;max-width:340px;';
+    banner.innerHTML = `<span style="font-size:1.4rem">🤖</span><div><div>AutoPilot đang tạo ảnh...</div><div id="autopilotBannerMsg" style="font-size:11px;opacity:.85;margin-top:2px;">Khởi động ChatGPT...</div></div>`;
+    document.body.appendChild(banner);
+
+    _autopilotPollTimer = setInterval(async () => {
+        try {
+            const r = await fetch(`${API}/status/${jobId}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            const msgEl = document.getElementById('autopilotBannerMsg');
+            if (msgEl) msgEl.textContent = d.message || '';
+
+            if (d.status === 'done') {
+                clearInterval(_autopilotPollTimer);
+                _autopilotPollTimer = null;
+
+                // Update banner → success
+                const b = document.getElementById('autopilotBanner');
+                if (b) {
+                    b.style.background = 'linear-gradient(135deg,#059669,#047857)';
+                    b.innerHTML = `<span style="font-size:1.4rem">✅</span><div><div>AutoPilot hoàn tất!</div><div style="font-size:11px;opacity:.85;margin-top:2px;">${d.message||'Ảnh đã được chèn vào kịch bản'}</div></div>`;
+                    setTimeout(() => b.remove(), 4000);
+                }
+
+                // Reload script from server
+                if (currentProject && currentLesson) {
+                    try {
+                        const sr = await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}`);
+                        if (sr.ok) {
+                            const data = await sr.json();
+                            const newScript = data.lesson?.script;
+                            if (newScript) {
+                                currentScript = newScript;
+                                // Clear image cache so new images load fresh
+                                window._PREVIEW_IMG_CACHE = {};
+                                renderScriptUI(currentScript);
+                                // Redraw preview if on preview tab
+                                if (document.getElementById('panel-preview')?.classList.contains('active')) {
+                                    const tmp = previewPlaying; previewPlaying = true; runPreview(); previewPlaying = tmp;
+                                }
+                            }
+                        }
+                    } catch(e) { console.error('Reload script failed:', e); }
+                }
+            } else if (d.status === 'error') {
+                clearInterval(_autopilotPollTimer);
+                _autopilotPollTimer = null;
+                const b = document.getElementById('autopilotBanner');
+                if (b) {
+                    b.style.background = 'linear-gradient(135deg,#dc2626,#991b1b)';
+                    b.innerHTML = `<span style="font-size:1.4rem">❌</span><div><div>AutoPilot lỗi</div><div style="font-size:11px;opacity:.85;margin-top:2px;">${d.message||''}</div></div>`;
+                    setTimeout(() => b.remove(), 6000);
+                }
+            }
+        } catch(e) { /* network error, keep polling */ }
+    }, 3000);
 }
 
 // ── Sync seekBar ────────────────────────────────────────────────

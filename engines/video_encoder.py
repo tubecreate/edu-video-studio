@@ -152,10 +152,27 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
     if progress_callback:
         progress_callback(8, f"⚡ Pipe + {encoder_label}: rendering...")
 
-    await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (8, 96))
+    try:
+        await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (8, 96))
+    except RuntimeError as e:
+        # Pipe mode failed (GPU encoder unavailable) — fallback to frames + CPU
+        logger.warning(f"[Pipe] Failed ({e}), falling back to frames + CPU encoder...")
+        if progress_callback:
+            progress_callback(10, "⚠️ Pipe failed, switching to CPU frames mode...")
+        return await _render_frames(
+            node_exe, ext_dir, script_path, timing_path, output_dir,
+            theme, audio_path, final_video, env, progress_callback, "cpu",
+        )
 
     if not os.path.isfile(final_video):
-        raise RuntimeError("No output video file produced!")
+        # Pipe produced no output — fallback to frames
+        logger.warning("[Pipe] No output file, falling back to frames + CPU...")
+        if progress_callback:
+            progress_callback(10, "⚠️ No output, switching to CPU frames mode...")
+        return await _render_frames(
+            node_exe, ext_dir, script_path, timing_path, output_dir,
+            theme, audio_path, final_video, env, progress_callback, "cpu",
+        )
 
     if progress_callback:
         progress_callback(100, "Video export complete!")

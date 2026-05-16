@@ -69,9 +69,9 @@ const THEMES = {
 };
 const T = THEMES[themeName] || THEMES.dark;
 
-let createCanvas;
-try { ({ createCanvas } = require('canvas')); } catch(e) {
-    try { ({ createCanvas } = require(path.join(process.env.NODE_PATH||'','canvas'))); } catch(e2) {
+let createCanvas, loadImage;
+try { ({ createCanvas, loadImage } = require('canvas')); } catch(e) {
+    try { ({ createCanvas, loadImage } = require(path.join(process.env.NODE_PATH||'','canvas'))); } catch(e2) {
         console.log(JSON.stringify({status:'error',message:'canvas not installed'}));
         process.exit(1);
     }
@@ -264,6 +264,74 @@ function renderElementAtY(el, cursorY, stepProgress) {
             ctx.stroke(); ctx.setLineDash([]);
             return 18;
         }
+        case 'image': {
+            if (el.src && IMAGE_CACHE[el.src]) {
+                const img = IMAGE_CACHE[el.src];
+                const iw = el.width || 800;
+                const ih = el.height || 800;
+                const ix = (W - iw) / 2;
+                
+                ctx.save();
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(ix, cursorY, iw, ih, 16);
+                else ctx.rect(ix, cursorY, iw, ih);
+                ctx.clip();
+                ctx.drawImage(img, ix, cursorY, iw, ih);
+                ctx.restore();
+                
+                // Border
+                ctx.strokeStyle = rc('border') || '#333';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(ix, cursorY, iw, ih, 16);
+                else ctx.rect(ix, cursorY, iw, ih);
+                ctx.stroke();
+                
+                return ih + 24; // padding
+            }
+            return 0;
+        }
+        case 'digit_row': {
+            // Renders digits 0-9 in a row with even/odd coloring
+            // e.g. {"type":"digit_row","even_color":"cyan","odd_color":"orange","fontSize":52}
+            const drFs = el.fontSize || 52;
+            const drEven = rc(el.even_color || 'cyan');
+            const drOdd  = rc(el.odd_color  || 'orange');
+            const digits = ['0','1','2','3','4','5','6','7','8','9'];
+            const cellW  = (W - MX * 2) / digits.length;
+            const rowH   = drFs + 24;
+            const bgEven = drEven + '33'; // 20% alpha
+            const bgOdd  = drOdd  + '33';
+
+            ctx.font = `bold ${drFs}px ${T.font}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            digits.forEach((d, i) => {
+                const isEven = i % 2 === 0;
+                const x = MX + cellW * i;
+                const cy2 = cursorY + rowH / 2;
+
+                // Background pill
+                ctx.fillStyle = isEven ? bgEven : bgOdd;
+                const r = 8;
+                ctx.beginPath();
+                ctx.roundRect(x + 2, cursorY + 2, cellW - 4, rowH - 4, r);
+                ctx.fill();
+
+                // Border
+                ctx.strokeStyle = isEven ? drEven : drOdd;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+
+                // Digit
+                ctx.fillStyle = isEven ? drEven : drOdd;
+                ctx.fillText(d, x + cellW / 2, cy2);
+            });
+
+            ctx.textAlign = 'left';
+            return rowH + 12;
+        }
         case 'icon': {
             const sz = el.size || 64;
             ctx.font = `${sz}px ${T.font}`;
@@ -284,6 +352,123 @@ function renderElementAtY(el, cursorY, stepProgress) {
             ctx.closePath(); ctx.fillStyle = col; ctx.fill();
             return 30;
         }
+
+        // ── VISUAL ELEMENT: number_line ──────────────────────────────
+        // {"type":"number_line","min":0,"max":10,"highlight":[3,7],"mark":5,"color":"cyan","fontSize":28}
+        // Draws a ruler-style number line with optional highlighted points
+        case 'number_line': {
+            const nlMin = el.min ?? 0;
+            const nlMax = el.max ?? 10;
+            const nlH = 80;
+            const nlY = cursorY + nlH / 2;
+            const nlX1 = MX + 10, nlX2 = W - MX - 10;
+            const nlRange = nlMax - nlMin || 1;
+            const nlColor = rc(el.color || 'cyan');
+            const nlFs = el.fontSize || 24;
+            const highlights = Array.isArray(el.highlight) ? el.highlight : [];
+
+            // Main line
+            ctx.strokeStyle = nlColor + '99'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(nlX1, nlY); ctx.lineTo(nlX2, nlY); ctx.stroke();
+            // Arrow head
+            ctx.beginPath(); ctx.moveTo(nlX2, nlY);
+            ctx.lineTo(nlX2 - 12, nlY - 6); ctx.lineTo(nlX2 - 12, nlY + 6);
+            ctx.closePath(); ctx.fillStyle = nlColor + '99'; ctx.fill();
+
+            // Ticks and labels
+            ctx.font = `${nlFs}px ${T.font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+            for (let v = nlMin; v <= nlMax; v++) {
+                const px = nlX1 + ((v - nlMin) / nlRange) * (nlX2 - nlX1 - 20);
+                const isHighlight = highlights.includes(v);
+                const isMark = v === el.mark;
+
+                if (isMark) {
+                    // Big circle marker
+                    ctx.beginPath(); ctx.arc(px, nlY, 14, 0, Math.PI * 2);
+                    ctx.fillStyle = nlColor; ctx.fill();
+                    ctx.fillStyle = '#0d0d1a'; ctx.fillText(String(v), px, nlY - nlFs/2 - 2);
+                } else if (isHighlight) {
+                    ctx.beginPath(); ctx.arc(px, nlY, 8, 0, Math.PI * 2);
+                    ctx.fillStyle = nlColor + '99'; ctx.fill();
+                } else {
+                    // Tick
+                    ctx.strokeStyle = nlColor + '66'; ctx.lineWidth = 1.5;
+                    ctx.beginPath(); ctx.moveTo(px, nlY - 6); ctx.lineTo(px, nlY + 6); ctx.stroke();
+                }
+                ctx.fillStyle = isHighlight || isMark ? nlColor : nlColor + '88';
+                ctx.fillText(String(v), px, nlY + 12);
+            }
+            ctx.textAlign = 'left';
+            return nlH + nlFs + 16;
+        }
+
+        // ── VISUAL ELEMENT: comparison_bar ───────────────────────────
+        // {"type":"comparison_bar","left":{"label":"A","value":7,"color":"cyan"},"right":{"label":"B","value":5,"color":"orange"}}
+        // Draws two horizontal bars side by side for comparison (lớn hơn/nhỏ hơn)
+        case 'comparison_bar': {
+            const cb = el;
+            const left  = cb.left  || { label: 'A', value: 5, color: 'cyan' };
+            const right = cb.right || { label: 'B', value: 3, color: 'orange' };
+            const maxVal = Math.max(left.value, right.value, 1);
+            const barH = 48, gap = 24, labelW = 120;
+            const availW = (W - MX * 2 - gap - labelW * 2) / 2;
+
+            [[left, MX], [right, MX + availW + gap + labelW]].forEach(([side, startX]) => {
+                const barW = (side.value / maxVal) * availW;
+                const col = rc(side.color || 'cyan');
+                const bY = cursorY + 10;
+
+                // Label
+                ctx.font = `bold 30px ${T.font}`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+                ctx.fillStyle = col; ctx.fillText(side.label, startX + labelW - 8, bY + barH / 2);
+
+                // Bar background
+                ctx.fillStyle = col + '22';
+                ctx.beginPath(); ctx.roundRect(startX + labelW, bY, availW, barH, 6); ctx.fill();
+                // Bar fill
+                ctx.fillStyle = col + 'BB';
+                ctx.beginPath(); ctx.roundRect(startX + labelW, bY, barW, barH, 6); ctx.fill();
+                // Value label
+                ctx.textAlign = 'left'; ctx.fillStyle = col;
+                ctx.font = `bold 28px ${T.font}`;
+                ctx.fillText(String(side.value), startX + labelW + barW + 8, bY + barH / 2);
+            });
+
+            ctx.textAlign = 'left';
+            return barH + 36;
+        }
+
+        // ── VISUAL ELEMENT: fraction_bar ─────────────────────────────
+        // {"type":"fraction_bar","numerator":3,"denominator":4,"color":"cyan","showDecimal":false}
+        // Draws a visual fraction as a segmented bar
+        case 'fraction_bar': {
+            const fn2 = el.numerator ?? 1, fd = el.denominator ?? 4;
+            const fbH = 64, fbY = cursorY + 8;
+            const fbW = W - MX * 2;
+            const segW = fbW / fd;
+            const fbCol = rc(el.color || 'cyan');
+
+            for (let i = 0; i < fd; i++) {
+                const sx = MX + i * segW;
+                const filled = i < fn2;
+                ctx.fillStyle = filled ? fbCol + 'CC' : fbCol + '22';
+                ctx.beginPath(); ctx.roundRect(sx + 2, fbY, segW - 4, fbH, 4); ctx.fill();
+                ctx.strokeStyle = fbCol + '88'; ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+
+            // Fraction label centered
+            ctx.font = `bold 36px ${T.font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`${fn2}/${fd}`, W / 2, fbY + fbH / 2);
+            if (el.showDecimal) {
+                ctx.font = `24px ${T.font}`; ctx.fillStyle = fbCol;
+                ctx.fillText(`= ${(fn2/fd).toFixed(2)}`, W / 2 + 80, fbY + fbH / 2);
+            }
+            ctx.textAlign = 'left';
+            return fbH + 28;
+        }
+
         case 'math_calc': {
             const fs = el.fontSize || 48;
             ctx.font = `bold ${fs}px 'Courier New', Consolas, monospace`;
@@ -295,6 +480,46 @@ function renderElementAtY(el, cursorY, stepProgress) {
             const ops = el.operands || [];
             const inters = el.intermediates || [];
             const fullResult = String(el.result || '');
+
+            // ── Expression-mode fallback ──────────────────────────────
+            // Detect when operands are expression strings (not simple numbers)
+            // e.g. ["35 + 5 × 2", "5 × 2 = 10", "35 + 10 = 45"]
+            const isExprMode = ops.some(o => /[a-zA-Z×÷=]/.test(String(o)) || String(o).includes('+') || String(o).includes('-'));
+            if (isExprMode || (ops.length === 0 && el.expression)) {
+                // Render as centered stacked expression lines
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                const lines = ops.length > 0 ? ops : (el.expression ? [el.expression] : []);
+                for (let i = 0; i < lines.length; i++) {
+                    const line = String(lines[i]);
+                    // Last line or line containing '=' with result → highlight green
+                    const isResult = i === lines.length - 1 && fullResult && line.includes(fullResult);
+                    if (isResult) {
+                        ctx.save();
+                        ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 18;
+                        ctx.fillStyle = '#00FF88';
+                    }
+                    ctx.fillText(line, W / 2, cy);
+                    if (isResult) ctx.restore();
+                    cy += fs * 1.45;
+                }
+                // Separator + result if not already shown in last line
+                if (fullResult && ops.length > 0 && !ops[ops.length - 1].toString().includes(fullResult)) {
+                    cy += 4;
+                    ctx.beginPath(); ctx.moveTo(W / 2 - 200, cy); ctx.lineTo(W / 2 + 200, cy);
+                    ctx.strokeStyle = rc(el.color || 'white'); ctx.lineWidth = 3; ctx.stroke();
+                    cy += 14;
+                    ctx.save();
+                    ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 18;
+                    ctx.fillStyle = '#00FF88';
+                    ctx.fillText(fullResult, W / 2, cy);
+                    ctx.restore();
+                    cy += fs * 1.45;
+                }
+                ctx.textAlign = 'left';
+                return (cy - cursorY) + 10;
+            }
+            // ── End expression-mode ───────────────────────────────────
 
             if (el.op === ':') {
                 // Vietnamese Long Division Layout
@@ -509,6 +734,7 @@ function renderElementAtY(el, cursorY, stepProgress) {
 function buildUnifiedLayout(currentTime, renderFrom, steps, tSteps) {
     const nonGeoEls = [];
     const geoEls = [];
+    let hasImageGen = false; // only allow first image_generation placeholder
     
     for (let i = renderFrom; i < steps.length; i++) {
         const step = steps[i], ts = tSteps[i];
@@ -523,6 +749,12 @@ function buildUnifiedLayout(currentTime, renderFrom, steps, tSteps) {
                 continue;
             }
             
+            // Deduplicate image_generation: only render the first placeholder per screen
+            if (el.type === 'image_generation') {
+                if (hasImageGen) continue; // skip duplicates
+                hasImageGen = true;
+            }
+            
             let replaced = false;
             // Deduplicate math_calc by operands and operator
             if (el.type === 'math_calc') {
@@ -530,7 +762,7 @@ function buildUnifiedLayout(currentTime, renderFrom, steps, tSteps) {
                 for (let j = nonGeoEls.length - 1; j >= 0; j--) {
                     const u = nonGeoEls[j];
                     if (u.el.type === 'math_calc' && u.el.op + '|' + (u.el.operands||[]).join('|') === sig) {
-                        nonGeoEls[j] = { el: el, rawP: u.rawP }; // keep old rawP so it stays fully visible
+                        nonGeoEls[j] = { el: el, rawP: u.rawP };
                         replaced = true;
                         break;
                     }
@@ -543,7 +775,6 @@ function buildUnifiedLayout(currentTime, renderFrom, steps, tSteps) {
             }
         }
         
-        // Add a gap after this step's elements if we added any new vertical space
         if (addedAny) {
             nonGeoEls.push({ el: { type: 'gap' }, rawP: 1 });
         }
@@ -658,18 +889,17 @@ function renderFrame(currentTime) {
 
     if (geoEls.length > 0) {
         // ── Split layout: text in top portion, geo in fixed bottom zone ──
-        const GEO_ZONE_START = Math.round(H * 0.52); // always at 52% of canvas height
-        const GEO_ZONE_H     = H - GEO_ZONE_START - 80; // remaining space minus progress bar
+        const GEO_ZONE_START = Math.round(H * 0.52);
+        const GEO_ZONE_H     = H - GEO_ZONE_START - 80;
 
-        // Clip text rendering to top zone only
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, 0, W, GEO_ZONE_START - 10);
         ctx.clip();
-        renderUnifiedElements(nonGeoEls, cursorY);
+        const textStartY = calcCenteredStartY(nonGeoEls, 80, GEO_ZONE_START - 10);
+        renderUnifiedElements(nonGeoEls, textStartY);
         ctx.restore();
 
-        // Draw separator line
         ctx.save();
         ctx.strokeStyle = T.geoBorder || '#3a3a5a';
         ctx.lineWidth = 1;
@@ -683,11 +913,69 @@ function renderFrame(currentTime) {
 
         renderGeometryZone(geoEls, GEO_ZONE_START, GEO_ZONE_H);
     } else {
-        renderUnifiedElements(nonGeoEls, cursorY);
+        const startY = calcCenteredStartY(nonGeoEls, 80, H - 80);
+        renderUnifiedElements(nonGeoEls, startY);
     }
 
     drawHighlights(currentTime);
     drawProgress(currentTime, totalDur);
+}
+
+/**
+ * Estimate total height of a unified element list (pre-render pass).
+ * Used to vertically center content when it doesn't fill the screen.
+ */
+function estimateTotalHeight(els) {
+    let h = 0;
+    let i = 0;
+    while (i < els.length) {
+        const el = els[i].el;
+        if (el.type === 'gap') { h += 18; i++; continue; }
+        if (el.type === 'box') {
+            let j = i + 1;
+            let innerH = 0;
+            while (j < els.length && ['text','math_calc','reveal'].includes(els[j].el.type)) {
+                innerH += estimateElementHeight(els[j].el);
+                j++;
+            }
+            h += innerH + 40 + 8; // padding + gap
+            i = j;
+            continue;
+        }
+        h += estimateElementHeight(el);
+        i++;
+    }
+    return h;
+}
+
+function estimateElementHeight(el) {
+    if (!el) return 0;
+    switch (el.type) {
+        case 'text':    return measureTextHeight(el) + 6;
+        case 'math_calc': return measureTextHeight(el) + 10;
+        case 'reveal':  return (el.fontSize || 44) * 1.4 + 6;
+        case 'line':    return 18;
+        case 'icon':    return (el.size || 64) + 10;
+        case 'arrow':   return 30;
+        case 'image':   return (el.height || 800) + 24;
+        case 'image_generation': return 380 + 24; // placeholder height
+        case 'gap':     return 18;
+        default:        return 0;
+    }
+}
+
+/**
+ * Calculate the optimal startY to vertically center content.
+ * Keeps a minimum top margin of minY.
+ * Only centers if content height < 60% of available height (otherwise top-align).
+ */
+function calcCenteredStartY(els, minY, maxY) {
+    const available = maxY - minY;
+    const totalH = estimateTotalHeight(els);
+    if (totalH >= available * 0.75) return minY; // content fills enough space — top align
+    // Center in available space, with minimum top margin
+    const centered = minY + (available - totalH) / 2;
+    return Math.max(minY, Math.min(centered, minY + available * 0.3)); // clamp: don't push too far down
 }
 
 function renderGeometryZone(geoElsObj, startY, zoneH) {
@@ -882,6 +1170,7 @@ function _measureElH(el) {
     if (el.type === 'icon') return (el.size || 64) + 10;
     if (el.type === 'line') return 18;
     if (el.type === 'arrow') return 30;
+    if (el.type === 'image') return (el.height || 800) + 24;
     return 0;
 }
 
@@ -957,7 +1246,43 @@ function _highlightEl(el, y, activeWord) {
 
 const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames' (PNG files)
 
+const IMAGE_CACHE = {};
+
 (async () => {
+    // Preload all image elements in script
+    for (const step of script.steps || []) {
+        for (const el of step.elements || []) {
+            if (el.type === 'image' && el.src) {
+                if (!IMAGE_CACHE[el.src] && loadImage) {
+                    try {
+                        process.stderr.write(`[Renderer] Loading image: ${el.src}\n`);
+                        let localPath = el.src;
+                        // Handle both /api/v1/edu_video/gallery/file/ and old /api/v1/edu_video_studio/gallery/file/
+                        if (localPath.includes('/gallery/file/')) {
+                            const rel = localPath.split('/gallery/file/')[1]; // e.g. 'items/xxx.png'
+                            // gallery dir: edu_video_studio/gallery/ relative to DATA_DIR
+                            // __dirname = engines/, parent = edu_video_studio/, DATA_DIR = data/
+                            const dataDir = path.resolve(__dirname, '..', '..', '..');
+                            const galleryDir = path.join(dataDir, 'edu_video_studio', 'gallery');
+                            // Try direct path first (includes subfolder like items/)
+                            let resolved = path.join(galleryDir, rel);
+                            if (!require('fs').existsSync(resolved)) {
+                                // Try bare filename in items/ as fallback
+                                resolved = path.join(galleryDir, 'items', path.basename(rel));
+                            }
+                            localPath = resolved;
+                        }
+                        const img = await loadImage(localPath);
+                        IMAGE_CACHE[el.src] = img;
+                        process.stderr.write(`[Renderer] Image loaded OK: ${localPath}\n`);
+                    } catch (e) {
+                        process.stderr.write(`[Renderer] Failed to load image ${el.src}: ${e.message}\n`);
+                    }
+                }
+            }
+        }
+    }
+
     const totalDur = timing.total_duration || 30;
     const totalFrames = Math.ceil(totalDur * FPS);
     process.stderr.write(`[Renderer v5] ${totalFrames} frames, ${FPS}fps, ${totalDur}s, mode=${MODE}\n`);
@@ -1021,14 +1346,21 @@ const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames'
         }
 
         // Render frames and pipe raw pixel data
+        let pipeError = null;
+        ffmpeg.stdin.on('error', (err) => { pipeError = err; });
+
         for (let f = 0; f < totalFrames; f++) {
+            if (pipeError) {
+                process.stderr.write(`[Renderer] Pipe broken at frame ${f}: ${pipeError.message}\n`);
+                break;
+            }
             renderFrame(f / FPS);
             const buf = canvas.toBuffer('raw'); // BGRA raw pixels
             // Convert BGRA → RGBA (node-canvas raw is BGRA on most platforms)
             for (let i = 0; i < buf.length; i += 4) {
                 const b = buf[i]; buf[i] = buf[i + 2]; buf[i + 2] = b;
             }
-            await writeFrame(buf);
+            try { await writeFrame(buf); } catch(e) { pipeError = e; break; }
 
             if (f % 30 === 0 || f === totalFrames - 1) {
                 const pct = Math.round((f / totalFrames) * 100);
@@ -1037,7 +1369,12 @@ const MODE = args.mode || 'pipe'; // 'pipe' (fast, direct to ffmpeg) or 'frames'
         }
 
         ffmpeg.stdin.end();
-        await ffmpegDone;
+        try { await ffmpegDone; } catch(e) {
+            process.stderr.write(`[Renderer] FFmpeg error: ${e.message}\n`);
+            // Report error so Python can fallback to CPU
+            console.log(JSON.stringify({ type: 'error', message: `FFmpeg pipe failed: ${e.message}` }));
+            process.exit(1);
+        }
         console.log(JSON.stringify({ type: 'done', status: 'success', totalFrames, outputFile }));
 
     } else {

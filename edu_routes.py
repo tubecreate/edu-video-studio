@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import uuid
+import time
 import asyncio
 import logging
 import base64
@@ -69,8 +70,13 @@ def _gallery_dir():
 def _read_json(path, default=None):
     if not os.path.exists(path):
         return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        # utf-8-sig strips UTF-8 BOM if present (e.g. files written by PowerShell)
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.error(f"_read_json failed for {path}: {e}")
+        return default
 
 
 def _write_json(path, data):
@@ -561,6 +567,10 @@ async def analyze_input_stream(
         subject = form.get("subject", "general")
         lang = form.get("lang", "vi")
         ai_settings_str = form.get("ai_settings", "{}")
+        illustration_mode = form.get("illustration_mode", "canvas")
+        chatgpt_profile = form.get("chatgpt_profile", "youtube6")
+        skip_auto_pilot = form.get("skip_auto_pilot", "false") == "true"
+        size = form.get("size", "1:1")
         
         for key, value in form.items():
             if key.startswith("image") and hasattr(value, "read"):
@@ -578,6 +588,10 @@ async def analyze_input_stream(
         subject = body.get("subject", "general")
         lang = body.get("lang", "vi")
         ai_settings_str = body.get("ai_settings", "{}")
+        illustration_mode = body.get("illustration_mode", "canvas")
+        chatgpt_profile = body.get("chatgpt_profile", "youtube6")
+        skip_auto_pilot = body.get("skip_auto_pilot", False)
+        size = body.get("size", "1:1")
 
     try:
         ai_settings = json.loads(ai_settings_str) if isinstance(ai_settings_str, str) else ai_settings_str
@@ -603,6 +617,7 @@ async def analyze_input_stream(
                 subject=subject,
                 lang=lang,
                 ai_settings=ai_settings,
+                illustration_mode=illustration_mode,
             ):
                 event_type = event.get("type", "")
                 
@@ -629,8 +644,25 @@ async def analyze_input_stream(
                             _write_text(os.path.join(lesson_dir, "raw_script.txt"), "".join(raw_script_text))
                             if image_bytes:
                                 img_path = os.path.join(lesson_dir, "input_image.jpg")
+                                # Also save as raw_vision.jpg for ChatGPT reference
+                                raw_vision_path = os.path.join(lesson_dir, "raw_vision.jpg")
                                 with open(img_path, "wb") as f:
                                     f.write(image_bytes)
+                                with open(raw_vision_path, "wb") as f:
+                                    f.write(image_bytes)
+                            
+                            # Auto-pilot: trigger image generation if mode=chatgpt AND
+                            # frontend is NOT running inline autopilot (skip_auto_pilot=True)
+                            if illustration_mode == "chatgpt" and final_script and not skip_auto_pilot:
+                                ap_job_id = f"autopilot_{lesson_id}_{uuid.uuid4().hex[:6]}"
+                                _jobs[ap_job_id] = {"status": "running", "progress": 0, "message": "AutoPilot: Starting ChatGPT image generation..."}
+                                asyncio.create_task(_run_chatgpt_autopilot(
+                                    final_script, lesson_dir, chatgpt_profile, project_id, lesson_id, ap_job_id, size
+                                ))
+                                event["auto_pilot"] = True
+                                event["autopilot_job_id"] = ap_job_id
+                            elif illustration_mode == "chatgpt" and skip_auto_pilot:
+                                logger.info("[AutoPilot] Skipped — frontend inline autopilot will handle image generation")
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"Stream analyze error: {e}")
@@ -646,6 +678,167 @@ async def analyze_input_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _run_chatgpt_autopilot(script: dict, lesson_dir: str, profile: str, project_id: str, lesson_id: str, ap_job_id: str = None, size: str = "1:1"):
+    """Background task: scan script for image_generation elements and run ChatGPT batch."""
+    def _update_job(msg, pct=None):
+        if ap_job_id and ap_job_id in _jobs:
+            _jobs[ap_job_id]["message"] = msg
+            if pct is not None:
+                _jobs[ap_job_id]["progress"] = pct
+
+    try:
+        import subprocess
+        
+        # Find ref image
+        ref_image = None
+        for ext in [".jpg", ".png", ".jpeg"]:
+            p = os.path.join(lesson_dir, f"raw_vision{ext}")
+            if os.path.isfile(p):
+                ref_image = p
+                break
+
+        # Collect all image_generation jobs from script
+        jobs = []
+        for step in script.get("steps", []):
+            for idx, el in enumerate(step.get("elements", [])):
+                if el.get("type") == "image_generation" and el.get("prompt"):
+                    job_key = f"step{step['id']}_el{idx}"
+                    out_img = os.path.join(lesson_dir, f"tmp_{job_key}.png")
+                    job = {
+                        "id": job_key,
+                        "prompt": el["prompt"],
+                        "output": out_img,
+                        "size": size,
+                        "_step_id": step["id"],
+                        "_el_idx": idx,
+                    }
+                    if ref_image:
+                        job["ref_images"] = [ref_image]
+                    jobs.append(job)
+
+        if not jobs:
+            logger.info("[AutoPilot] No image_generation elements found in script")
+            if ap_job_id and ap_job_id in _jobs:
+                _jobs[ap_job_id].update({"status": "done", "progress": 100, "message": "No images to generate"})
+            return
+
+        _update_job(f"Starting ChatGPT - {len(jobs)} image(s) to generate...", 5)
+        logger.info(f"[AutoPilot] Starting batch of {len(jobs)} images with profile={profile}")
+        
+        # Write jobs file
+        tmp_jobs_path = os.path.join(lesson_dir, "chatgpt_autopilot_jobs.json")
+        with open(tmp_jobs_path, "w", encoding="utf-8") as f:
+            json.dump(jobs, f, ensure_ascii=False)
+
+        # Run chatgpt_image.js
+        try:
+            from tubecli.config import DATA_DIR as _DATA_DIR
+            ext_dir = os.path.join(str(_DATA_DIR), "extensions_external", "pod_studio", "engines")
+        except Exception:
+            ext_dir = os.path.join(os.path.dirname(__file__), "..", "pod_studio", "engines")
+        js_script = os.path.join(ext_dir, "chatgpt_image.js")
+        if not os.path.isfile(js_script):
+            raise FileNotFoundError(f"chatgpt_image.js not found at {js_script}")
+
+        cmd = ["node", js_script, "--profile", profile, "--jobs", tmp_jobs_path]
+        
+        def _run_subprocess():
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+            results = {}
+            for line in proc.stdout:
+                line = line.strip()
+                if not line: continue
+                logger.info(f"[AutoPilot] {line}")
+                if line.startswith("{") and "status" in line:
+                    try:
+                        ev = json.loads(line)
+                        if ev.get("status") == "success":
+                            results[ev["id"]] = ev["path"]
+                    except Exception:
+                        pass
+            proc.wait()
+            return results
+        
+        _update_job("Browser is open - generating images with ChatGPT...", 20)
+        results = await asyncio.to_thread(_run_subprocess)
+        _update_job(f"Images generated ({len(results)}/{len(jobs)}), saving to gallery...", 80)
+        
+        if os.path.isfile(tmp_jobs_path):
+            os.remove(tmp_jobs_path)
+
+        # Update gallery and script
+        g_dir = _gallery_dir()
+        items_dir = os.path.join(g_dir, "items")
+        os.makedirs(items_dir, exist_ok=True)
+        cat_file = os.path.join(g_dir, "gallery_categories.json")
+        cats = _read_json(cat_file, [])
+        if not any(c.get("id") == "ai_generated" for c in cats):
+            cats.append({"id": "ai_generated", "name": "AI Generated"})
+            _write_json(cat_file, cats)
+        meta_file = os.path.join(g_dir, "gallery_items.json")
+        gallery_items = _read_json(meta_file, [])
+
+        script_path = os.path.join(lesson_dir, "lesson_script.json")
+        fresh_script = _read_json(script_path)
+
+        inserted = 0
+        for job in jobs:
+            step_id = job["_step_id"]
+            el_idx = job["_el_idx"]
+            out_img = job["output"]
+            
+            if not os.path.isfile(out_img):
+                logger.warning(f"[AutoPilot] Image not generated for {job['id']}")
+                continue
+
+            file_uuid = uuid.uuid4().hex
+            gallery_file = os.path.join(items_dir, f"{file_uuid}.png")
+            shutil.move(out_img, gallery_file)
+
+            gallery_items.append({
+                "id": file_uuid,
+                "category_id": "ai_generated",
+                "filename": f"{file_uuid}.png",
+                "name": f"AutoPilot {lesson_id[:8]} step{step_id}",
+                "prompt": job["prompt"],
+                "created_at": time.time()
+            })
+
+            img_src = f"/api/v1/edu_video/gallery/file/items/{file_uuid}.png"
+            # Update element in script
+            for step in fresh_script.get("steps", []):
+                if step.get("id") == step_id:
+                    els = step.get("elements", [])
+                    if el_idx < len(els) and els[el_idx].get("type") == "image_generation":
+                        els[el_idx] = {
+                            "id": f"img_{file_uuid[:8]}",
+                            "type": "image",
+                            "src": img_src,
+                            "width": els[el_idx].get("width", 800),
+                            "height": els[el_idx].get("height", 700)
+                        }
+                        inserted += 1
+                    break
+
+        _write_json(meta_file, gallery_items)
+        _write_json(script_path, fresh_script)
+        
+        logger.info(f"[AutoPilot] Done! {inserted} images inserted into script.")
+        if ap_job_id and ap_job_id in _jobs:
+            _jobs[ap_job_id].update({
+                "status": "done",
+                "progress": 100,
+                "message": f"✅ AutoPilot hoàn tất! {inserted} ảnh đã được chèn vào kịch bản.",
+                "inserted": inserted
+            })
+
+    except Exception as e:
+        logger.error(f"[AutoPilot] Error: {e}")
+        traceback.print_exc()
+        if ap_job_id and ap_job_id in _jobs:
+            _jobs[ap_job_id].update({"status": "error", "message": str(e)})
 
 
 # ── TTS Audio Generation ────────────────────────────────────────
@@ -696,7 +889,174 @@ async def generate_audio(request: Request):
 
 # ── Video Render ─────────────────────────────────────────────────
 
+@router.post("/generate-image-chatgpt")
+async def generate_image_chatgpt(request: Request):
+    """Generate image using ChatGPT browser automation, save to gallery and update script."""
+    body = await request.json()
+    project_id = body.get("project_id")
+    lesson_id = body.get("lesson_id")
+    step_idx = body.get("step_idx")
+    prompt = body.get("prompt")
+    profile = body.get("profile", "youtube6")
+    size = body.get("size", "1:1")  # default 1:1 square
+
+    if not all([project_id, lesson_id, prompt]) or step_idx is None:
+        raise HTTPException(400, "project_id, lesson_id, step_idx, prompt required")
+
+    lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
+    script_path = os.path.join(lesson_dir, "lesson_script.json")
+    if not os.path.isfile(script_path):
+        raise HTTPException(400, "Lesson script not found")
+
+    # Find reference image
+    ref_image = None
+    for ext in [".jpg", ".png", ".jpeg"]:
+        p = os.path.join(lesson_dir, f"raw_vision{ext}")
+        if os.path.isfile(p):
+            ref_image = p
+            break
+
+    job_id = f"chatgptimg_{lesson_id}_{uuid.uuid4().hex[:6]}"
+    _jobs[job_id] = {"status": "running", "progress": 0, "message": "Starting ChatGPT..."}
+
+    async def _run():
+        try:
+            # Create jobs.json for the node script
+            tmp_job = os.path.join(lesson_dir, f"job_{job_id}.json")
+            out_img = os.path.join(lesson_dir, f"tmp_{job_id}.png")
+            
+            job_data = {
+                "id": job_id,
+                "prompt": prompt,
+                "output": out_img,
+                "size": size
+            }
+            if ref_image:
+                job_data["ref_images"] = [ref_image]
+                
+            with open(tmp_job, "w", encoding="utf-8") as f:
+                json.dump([job_data], f)
+                
+            _jobs[job_id]["message"] = "Opening ChatGPT browser profile..."
+            
+            # Find the pod_studio script
+            try:
+                from tubecli.config import DATA_DIR as _DATA_DIR
+                ext_dir = os.path.join(str(_DATA_DIR), "extensions_external", "pod_studio", "engines")
+            except Exception:
+                ext_dir = os.path.join(os.path.dirname(__file__), "..", "pod_studio", "engines")
+            js_script = os.path.join(ext_dir, "chatgpt_image.js")
+            
+            if not os.path.isfile(js_script):
+                raise Exception(f"chatgpt_image.js not found at {js_script}")
+                
+            cmd = [
+                "node", js_script,
+                "--profile", profile,
+                "--jobs", tmp_job
+            ]
+            
+            import subprocess
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+            
+            for line in proc.stdout:
+                line = line.strip()
+                if not line: continue
+                logger.info(f"[ChatGPTImg] {line}")
+                if "{" in line and "status" in line:
+                    pass # ignore json logs for progress message
+                else:
+                    _jobs[job_id]["message"] = line.replace("[ChatGPTImg] ", "")
+
+            proc.wait()
+            
+            if os.path.isfile(tmp_job):
+                os.remove(tmp_job)
+                
+            if proc.returncode != 0 or not os.path.isfile(out_img):
+                raise Exception("ChatGPT failed to generate image or timeout")
+                
+            _jobs[job_id]["progress"] = 80
+            _jobs[job_id]["message"] = "Image generated, saving to Gallery..."
+            
+            # ── Move to Gallery ──
+            g_dir = _gallery_dir()
+            items_dir = os.path.join(g_dir, "items")
+            os.makedirs(items_dir, exist_ok=True)
+            
+            file_uuid = uuid.uuid4().hex
+            gallery_file = os.path.join(items_dir, f"{file_uuid}.png")
+            import shutil
+            shutil.move(out_img, gallery_file)
+            
+            # Ensure category exists
+            cat_file = os.path.join(g_dir, "gallery_categories.json")
+            cats = _read_json(cat_file, [])
+            ai_cat = next((c for c in cats if c.get("id") == "ai_generated"), None)
+            if not ai_cat:
+                cats.append({"id": "ai_generated", "name": "AI Generated"})
+                _write_json(cat_file, cats)
+                
+            # Add to gallery metadata
+            meta_file = os.path.join(g_dir, "gallery_items.json")
+            items = _read_json(meta_file, [])
+            item_meta = {
+                "id": file_uuid,
+                "category_id": "ai_generated",
+                "filename": f"{file_uuid}.png",
+                "name": f"ChatGPT Gen {lesson_id[:8]}",
+                "prompt": prompt,
+                "created_at": time.time()
+            }
+            items.append(item_meta)
+            _write_json(meta_file, items)
+            
+            # ── Update Lesson Script ──
+            _jobs[job_id]["message"] = "Updating script..."
+            script = _read_json(script_path)
+            
+            if 0 <= step_idx < len(script.get("steps", [])):
+                step = script["steps"][step_idx]
+                els = step.get("elements", [])
+                
+                # Remove geometry elements
+                els = [e for e in els if e.get("type") not in ("point", "segment", "right_angle")]
+
+                new_img_el = {
+                    "id": f"img_{file_uuid[:8]}",
+                    "type": "image",
+                    "src": f"/api/v1/edu_video/gallery/file/items/{file_uuid}.png",
+                    "width": 800,
+                    "height": 800
+                }
+
+                # Replace the first image_generation element (not append — avoids duplicate frames)
+                replaced = False
+                for i, e in enumerate(els):
+                    if e.get("type") == "image_generation":
+                        els[i] = new_img_el
+                        replaced = True
+                        break
+
+                if not replaced:
+                    # No image_generation placeholder found — just append
+                    els.append(new_img_el)
+
+                step["elements"] = els
+                
+                _write_json(script_path, script)
+
+            _jobs[job_id].update({"status": "done", "progress": 100, "message": "Success", "gallery_id": file_uuid})
+
+        except Exception as e:
+            logger.error(f"Generate image failed: {e}")
+            _jobs[job_id].update({"status": "error", "message": str(e)})
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
 @router.post("/render")
+
 async def render_video(request: Request):
     """Render frames + encode to MP4."""
     body = await request.json()
@@ -779,10 +1139,19 @@ async def serve_project_file(project_id: str, lesson_id: str, filename: str):
 @router.get("/gallery/file/{filename:path}")
 async def serve_gallery_file(filename: str):
     """Serve gallery asset files."""
-    filepath = os.path.join(_gallery_dir(), "assets", filename)
-    if not os.path.isfile(filepath):
-        raise HTTPException(404, "File not found")
-    return FileResponse(filepath)
+    gallery_dir = _gallery_dir()
+    direct = os.path.join(gallery_dir, filename)
+    logger.warning(f"[Gallery] filename={filename!r} gallery_dir={gallery_dir!r} direct={direct!r} exists={os.path.isfile(direct)}")
+    if os.path.isfile(direct):
+        return FileResponse(direct)
+    # Try bare filename in common subdirs
+    bare = os.path.basename(filename)
+    for subdir in ["items", "assets"]:
+        p = os.path.join(gallery_dir, subdir, bare)
+        logger.warning(f"[Gallery] trying {p!r} exists={os.path.isfile(p)}")
+        if os.path.isfile(p):
+            return FileResponse(p)
+    raise HTTPException(404, f"Gallery file not found: {filename} | checked: {direct}")
 
 
 # ── Wizard: Scan Lessons ─────────────────────────────────────────
