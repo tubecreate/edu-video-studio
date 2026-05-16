@@ -89,34 +89,81 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
     if engine == "edge":
         return await _generate_edge_tts_with_words(text, voice, output_path)
 
-    # Try vibevoice/viterbox via internal API
+    # Try vibevoice/everai via internal TTS API
     try:
-        import httpx
+        import httpx, shutil
+        # EverAI is slower (cloud+poll), give it more time
+        poll_timeout = 360 if engine == "everai" else 180
+        # Terminal success statuses (tts_routes sets "success" not "done")
+        SUCCESS_STATUSES = {"success", "done"}
+        ERROR_STATUSES   = {"error", "failed"}
+        # In-progress statuses we should keep waiting
+        WAIT_STATUSES    = {"running", "processing", "loading_model", "stitching", "pending", "queued"}
+
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "http://localhost:5295/api/v1/tts/synthesize",
                 json={"text": text, "voice": voice, "engine": engine},
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                task_id = data.get("task_id")
-                if task_id:
-                    for _ in range(60):
-                        await asyncio.sleep(1)
-                        status_resp = await client.get(f"http://localhost:5295/api/v1/tts/status/{task_id}")
-                        if status_resp.status_code == 200:
-                            sdata = status_resp.json()
-                            if sdata.get("status") == "done":
-                                audio_url = sdata.get("audio_url", "")
-                                if audio_url:
-                                    dl_resp = await client.get(f"http://localhost:5295{audio_url}")
-                                    if dl_resp.status_code == 200:
-                                        with open(output_path, "wb") as f:
-                                            f.write(dl_resp.content)
-                                        return True, []
-                            elif sdata.get("status") == "error":
-                                break
-                    return False, []
+            if resp.status_code != 200:
+                logger.warning(f"TTS synthesize failed: HTTP {resp.status_code}")
+                return False, []
+
+            data = resp.json()
+            task_id = data.get("task_id")
+            if not task_id:
+                logger.warning(f"TTS synthesize returned no task_id: {data}")
+                return False, []
+
+            logger.info(f"[audio_engine] TTS task {task_id} started (engine={engine})")
+
+            for poll_n in range(poll_timeout):
+                await asyncio.sleep(1)
+                status_resp = await client.get(f"http://localhost:5295/api/v1/tts/status/{task_id}")
+                if status_resp.status_code != 200:
+                    continue
+
+                sdata = status_resp.json()
+                task_status = sdata.get("status", "")
+
+                if task_status in SUCCESS_STATUSES:
+                    result = sdata.get("result", {})
+                    logger.info(f"[audio_engine] Task {task_id} done. result keys: {list(result.keys())}")
+
+                    # TTS routes store the output file path directly in result["output"]
+                    file_path = result.get("output") or result.get("output_path")
+                    if file_path and os.path.isfile(file_path):
+                        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+                        shutil.copy2(file_path, output_path)
+                        logger.info(f"[audio_engine] Copied {file_path} → {output_path}")
+                        return os.path.getsize(output_path) > 100, []
+
+                    # Fallback: some engines return relative audio_url
+                    audio_url = result.get("audio_url", "")
+                    if audio_url:
+                        dl_resp = await client.get(f"http://localhost:5295{audio_url}")
+                        if dl_resp.status_code == 200:
+                            with open(output_path, "wb") as f:
+                                f.write(dl_resp.content)
+                            return True, []
+
+                    logger.warning(f"[audio_engine] Task done but no file found. result={result}")
+                    break
+
+                elif task_status in ERROR_STATUSES:
+                    logger.warning(f"[audio_engine] TTS task {task_id} failed: {sdata.get('result', {})}")
+                    break
+
+                elif task_status in WAIT_STATUSES:
+                    if poll_n % 10 == 0:
+                        logger.info(f"[audio_engine] Waiting for task {task_id}: {task_status} ({poll_n}s)")
+                    continue
+                else:
+                    # Unknown status — keep waiting
+                    logger.debug(f"[audio_engine] Unknown status '{task_status}' for {task_id}")
+
+            return False, []
+
     except Exception as e:
         logger.warning(f"Internal TTS API failed ({engine}): {e}, falling back to edge-tts")
 

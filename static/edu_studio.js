@@ -56,65 +56,166 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── TTS Voices ──────────────────────────────────────────────────
 
+// Maps engine id → display name
+const ENGINE_LABELS = {
+    edge:     '⚡ Edge TTS',
+    vibevoice:'🎙️ VibeVoice',
+    gemini:   '✨ Gemini',
+    everai:   '🌟 EverAI',
+};
+
 async function loadVoices() {
     try {
         const res = await fetch('/api/v1/tts/voices');
         const data = await res.json();
-        if (data.success && data.voices) {
-            ttsVoicesCache = data.voices;
-            
-            let edgeHtml = '<optgroup label="Edge-TTS (Online)">';
-            let vibeHtml = '<optgroup label="VibeVoice (Offline)">';
-            let geminiHtml = '<optgroup label="Gemini (Online via automation)">';
-            
-            ttsVoicesCache.forEach(v => {
-                const langPart = v.language_name || v.language;
-                const namePart = v.name;
-                const genderPart = v.gender ? ` (${v.gender})` : '';
-                const optionHtml = `<option value="${v.id}" data-engine="${v.engine}">${langPart} - ${namePart}${genderPart}</option>`;
-                
-                if (v.engine === 'edge') edgeHtml += optionHtml;
-                else if (v.engine === 'gemini') geminiHtml += optionHtml;
-                else vibeHtml += optionHtml;
-            });
-            
-            edgeHtml += '</optgroup>';
-            vibeHtml += '</optgroup>';
-            geminiHtml += '</optgroup>';
-            
-            const finalHtml = vibeHtml + edgeHtml + geminiHtml;
-            
-        const headerSelect = document.getElementById('voiceSelect');
-        const audioSelect = document.getElementById('audioVoiceSelect');
-        
-        if (headerSelect) {
-            const currentVal = headerSelect.value;
-            headerSelect.innerHTML = finalHtml;
-            if (currentVal && headerSelect.querySelector(`option[value="${currentVal}"]`)) {
-                headerSelect.value = currentVal;
-            }
-            // Bind sync
-            headerSelect.addEventListener('change', function() {
-                if (audioSelect) audioSelect.value = this.value;
-                updateVoice();
-            });
-        }
-        if (audioSelect) {
-            const currentVal = audioSelect.value;
-            audioSelect.innerHTML = finalHtml;
-            if (currentVal && audioSelect.querySelector(`option[value="${currentVal}"]`)) {
-                audioSelect.value = currentVal;
-            }
-            // Bind sync
-            audioSelect.addEventListener('change', function() {
-                if (headerSelect) headerSelect.value = this.value;
-                updateVoice();
-            });
-        }
+        if (!data.success || !data.voices) return;
+
+        ttsVoicesCache = data.voices;
+        _buildVoiceFilters();
+        filterVoices(); // initial populate
+    } catch (e) {
+        console.warn('Failed to load TTS voices:', e);
     }
-} catch (e) {
-    console.warn('Failed to load TTS voices:', e);
 }
+
+function _buildVoiceFilters() {
+    if (!ttsVoicesCache || !ttsVoicesCache.length) return;
+
+    // Collect unique languages and engines
+    const langs = new Map();   // code → display name
+    const engines = new Set();
+
+    ttsVoicesCache.forEach(v => {
+        const langCode = v.language || '';
+        const langName = v.language_name || langCode;
+        if (langCode && !langs.has(langCode)) langs.set(langCode, langName);
+        if (v.engine) engines.add(v.engine);
+    });
+
+    // Build language options (sorted: vi first, then alphabetical)
+    const sortedLangs = [...langs.entries()].sort((a, b) => {
+        if (a[0] === 'vi') return -1;
+        if (b[0] === 'vi') return 1;
+        return a[1].localeCompare(b[1]);
+    });
+    const langOptionsHtml = '<option value="">🌐 Tất cả ngôn ngữ</option>' +
+        sortedLangs.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+
+    // Build engine options
+    const engineOptionsHtml = '<option value="">🔌 Tất cả engine</option>' +
+        [...engines].sort().map(e => `<option value="${e}">${ENGINE_LABELS[e] || e}</option>`).join('');
+
+    // Populate both sets of filter dropdowns
+    ['voiceLangFilter', 'audioLangFilter'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = langOptionsHtml;
+    });
+    ['voiceProviderFilter', 'audioProviderFilter'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = engineOptionsHtml;
+    });
+
+    // Auto-select language matching current project (if any)
+    if (typeof currentProject !== 'undefined' && currentProject?.lang) {
+        const pl = currentProject.lang;
+        ['voiceLangFilter', 'audioLangFilter'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.querySelector(`option[value="${pl}"]`)) el.value = pl;
+        });
+    }
+}
+
+function filterVoices() {
+    if (!ttsVoicesCache || !ttsVoicesCache.length) return;
+
+    // Read filters (header controls are master; audio controls mirror them)
+    const callerIsAudio = document.activeElement?.id?.startsWith('audio');
+
+    let langVal, providerVal;
+    if (callerIsAudio) {
+        langVal     = document.getElementById('audioLangFilter')?.value || '';
+        providerVal = document.getElementById('audioProviderFilter')?.value || '';
+        // Mirror to header
+        const hLang = document.getElementById('voiceLangFilter');
+        const hProv = document.getElementById('voiceProviderFilter');
+        if (hLang) hLang.value = langVal;
+        if (hProv) hProv.value = providerVal;
+    } else {
+        langVal     = document.getElementById('voiceLangFilter')?.value || '';
+        providerVal = document.getElementById('voiceProviderFilter')?.value || '';
+        // Mirror to audio
+        const aLang = document.getElementById('audioLangFilter');
+        const aProv = document.getElementById('audioProviderFilter');
+        if (aLang) aLang.value = langVal;
+        if (aProv) aProv.value = providerVal;
+    }
+
+    // Filter voices
+    const filtered = ttsVoicesCache.filter(v => {
+        if (langVal && v.language !== langVal) return false;
+        if (providerVal && v.engine !== providerVal) return false;
+        return true;
+    });
+
+    // Group by engine
+    const groups = {};
+    filtered.forEach(v => {
+        const g = v.engine || 'other';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(v);
+    });
+
+    const engineOrder = ['vibevoice', 'edge', 'gemini', 'everai'];
+    const buildHtml = () => {
+        let html = '';
+        const orderedEngines = [
+            ...engineOrder.filter(e => groups[e]),
+            ...Object.keys(groups).filter(e => !engineOrder.includes(e))
+        ];
+        if (orderedEngines.length === 0) {
+            html = '<option value="" disabled>Không có giọng phù hợp</option>';
+        } else {
+            orderedEngines.forEach(eng => {
+                const label = ENGINE_LABELS[eng] || eng;
+                html += `<optgroup label="${label}">`;
+                groups[eng].forEach(v => {
+                    const langPart = v.language_name || v.language || '';
+                    const genderPart = v.gender ? ` (${v.gender})` : '';
+                    html += `<option value="${v.id}" data-engine="${v.engine}">${langPart} – ${v.name}${genderPart}</option>`;
+                });
+                html += '</optgroup>';
+            });
+        }
+        return html;
+    };
+
+    const html = buildHtml();
+
+    // Apply to both voice selects, preserve current selection
+    const headerSelect = document.getElementById('voiceSelect');
+    const audioSelect  = document.getElementById('audioVoiceSelect');
+
+    [headerSelect, audioSelect].forEach(sel => {
+        if (!sel) return;
+        const cur = sel.value;
+        sel.innerHTML = html;
+        if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+    });
+
+    // Sync the two selects + bind change events
+    if (headerSelect && audioSelect) {
+        audioSelect.value = headerSelect.value;
+
+        // Re-bind change events (since innerHTML was replaced)
+        headerSelect.onchange = function() {
+            audioSelect.value = this.value;
+            updateVoice();
+        };
+        audioSelect.onchange = function() {
+            headerSelect.value = this.value;
+            updateVoice();
+        };
+    }
 }
 
 // ── Sidebar & Projects ──────────────────────────────────────────
@@ -1232,16 +1333,17 @@ function closeModal(id) {
 
 // ── Upload Handlers ─────────────────────────────────────────────
 
-const dropZone = document.getElementById('dropZone');
-const uploadArea = document.getElementById('uploadArea');
-const imageInput = document.getElementById('imageInput');
-const previewImg = document.getElementById('previewImg');
-const pdfPreviewContainer = document.getElementById('pdfPreviewContainer');
-const pdfPageCount = document.getElementById('pdfPageCount');
+// Legacy refs (may be null if wizard replaced them)
+const dropZone   = document.getElementById('wizardDropZone');
+const uploadArea = document.getElementById('wizardDropZone');
+const imageInput = document.getElementById('wizardImageInput');
+const previewImg = document.getElementById('wizardDropContent');
+const pdfPreviewContainer = null;
+const pdfPageCount = null;
 let uploadedFile = null;
 
 function setupDragDrop() {
-    uploadArea.addEventListener('click', () => imageInput.click());
+    if (!uploadArea || !imageInput || !dropZone) return; // wizard handles its own drag/drop
 
     imageInput.addEventListener('change', (e) => {
         if (e.target.files[0]) handleFile(e.target.files[0]);
@@ -1378,7 +1480,12 @@ function renderScriptUI(script) {
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
                     <span style="font-size:11px;padding:2px 8px;background:var(--bg-1);border-radius:10px;color:var(--text-2);">📦 ${els.length} elements</span>
                     ${elTypeSummary ? `<span style="font-size:11px;padding:2px 8px;background:var(--bg-1);border-radius:10px;color:var(--text-3);">${elTypeSummary}</span>` : ''}
-                    ${step.clear ? `<span style="font-size:11px;padding:2px 8px;background:rgba(239,68,68,.12);border-radius:10px;color:#f87171;">🆕 clear</span>` : ''}
+                    <button onclick="toggleStepClear(${i})" title="Toggle: xoá màn hình trước khi vẽ step này" style="
+                        font-size:11px;padding:2px 10px;border-radius:10px;cursor:pointer;border:1px solid;
+                        ${step.clear
+                            ? 'background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.4);color:#f87171;'
+                            : 'background:var(--bg-1);border-color:var(--border);color:var(--text-3);'}
+                    ">🆕 clear ${step.clear ? '✓' : '+'}</button>
                 </div>
                 <div class="step-content">${escHtml(textPreview || '(no text elements)')}</div>
                 <div class="step-voice">🎤 ${escHtml(step.voice_text)}</div>
@@ -1387,6 +1494,21 @@ function renderScriptUI(script) {
         `;
         container.appendChild(card);
     });
+}
+async function toggleStepClear(stepIdx) {
+    if (!currentScript || !currentScript.steps) return;
+    const step = currentScript.steps[stepIdx];
+    if (!step) return;
+    step.clear = !step.clear;
+    // Save immediately
+    try {
+        await fetch(`${API}/projects/${currentProject.id}/lessons/${currentLesson.id}/script`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script: currentScript }),
+        });
+    } catch(e) { console.warn('toggleClear save failed:', e); }
+    renderScriptUI(currentScript);
 }
 
 function openStepEdit(stepIdx) {

@@ -33,12 +33,17 @@
                     <option value="whiteboard">📋 Whiteboard</option>
                     <option value="chalkboard">🏫 Chalkboard</option>
                 </select>
-                <select id="voiceSelect" class="select-input" onchange="updateVoice()">
-                    <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
-                    <option value="vi-VN-NamMinhNeural">🇻🇳 Nam Minh (Nam)</option>
-                    <option value="en-US-AriaNeural">🇺🇸 Aria (EN)</option>
-                    <option value="en-US-GuyNeural">🇺🇸 Guy (EN)</option>
-                </select>
+                <div id="voiceFilterGroup" style="display:flex;gap:6px;align-items:center;">
+                    <select id="voiceLangFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo ngôn ngữ">
+                        <option value="">🌐 Tất cả ngôn ngữ</option>
+                    </select>
+                    <select id="voiceProviderFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo provider">
+                        <option value="">🔌 Tất cả engine</option>
+                    </select>
+                    <select id="voiceSelect" class="select-input" onchange="updateVoice()" style="min-width:160px;">
+                        <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
+                    </select>
+                </div>
             </div>
         </header>
 
@@ -189,12 +194,19 @@
                             <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px;">
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
                                     <label style="font-weight:600;font-size:13px;">🗣️ Giọng đọc</label>
-                                    <select id="audioVoiceSelect" class="select-input" style="width:220px;">
-                                        <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
-                                        <option value="vi-VN-NamMinhNeural">🇻🇳 Nam Minh (Nam)</option>
-                                        <option value="en-US-AriaNeural">🇺🇸 Aria (EN)</option>
-                                        <option value="en-US-GuyNeural">🇺🇸 Guy (EN)</option>
-                                    </select>
+                                    <div style="display:flex;flex-direction:column;gap:6px;">
+                                        <div style="display:flex;gap:6px;">
+                                            <select id="audioLangFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc ngôn ngữ">
+                                                <option value="">🌐 Tất cả ngôn ngữ</option>
+                                            </select>
+                                            <select id="audioProviderFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc engine">
+                                                <option value="">🔌 Tất cả engine</option>
+                                            </select>
+                                        </div>
+                                        <select id="audioVoiceSelect" class="select-input" style="width:100%;">
+                                            <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
+                                        </select>
+                                    </div>
                                 </div>
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
                                     <div>
@@ -645,6 +657,6 @@
         ⏹ STOP AUTO-PILOT
     </button>
 
-    <script src="/edu-video-studio-static/edu_studio.js?v=20260516"></script>
+    <script src="/edu-video-studio-static/edu_studio.js?v=20260516e"></script>
 </body>
 </html>
