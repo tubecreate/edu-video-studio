@@ -1,662 +1,1394 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎓 EduVideo Studio — TubeCreate</title>
-    <meta name="description" content="Tạo video dạy học step-by-step với AI">
-    <link rel="stylesheet" href="/edu-video-studio-static/edu_studio.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
-    <script src="/static/i18n.js"></script>
-</head>
-<body>
-    <div class="app-container">
-        <!-- Topbar -->
-        <header class="app-header">
-            <div class="header-left">
-                <span class="header-icon">🎓</span>
-                <div>
-                    <h1 class="header-title">EduVideo Studio</h1>
-                    <span class="header-subtitle">Tạo video dạy học step-by-step với AI</span>
-                </div>
-            </div>
-            <div class="header-actions">
-                <div id="aiStatusBadge" class="ai-status-badge" onclick="openAISettingsModal()" title="Cài đặt AI">
-                    <span class="ai-dot" id="aiStatusDot"></span>
-                    <span id="aiStatusText">Đang tải...</span>
-                </div>
-                <select id="themeSelect" class="select-input" onchange="updateTheme()">
-                    <option value="dark">🌙 Dark</option>
-                    <option value="whiteboard">📋 Whiteboard</option>
-                    <option value="chalkboard">🏫 Chalkboard</option>
-                </select>
-                <div id="voiceFilterGroup" style="display:flex;gap:6px;align-items:center;">
-                    <select id="voiceLangFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo ngôn ngữ">
-                        <option value="">🌐 Tất cả ngôn ngữ</option>
-                    </select>
-                    <select id="voiceProviderFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo provider">
-                        <option value="">🔌 Tất cả engine</option>
-                    </select>
-                    <select id="voiceSelect" class="select-input" onchange="updateVoice()" style="min-width:160px;">
-                        <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
-                    </select>
-                </div>
-            </div>
-        </header>
-
-        <!-- Studio Body (3 columns) -->
-        <div class="studio-body">
-            
-            <!-- Left Sidebar (Projects) -->
-            <aside class="sidebar" id="sidebar">
-                <div class="sidebar-head">
-                    <span class="sidebar-label">PROJECTS</span>
-                    <button class="btn-icon" onclick="showCreateProject()" title="Tạo project mới">➕</button>
-                </div>
-                <div class="sidebar-list" id="sidebarList">
-                    <!-- Populated by JS -->
-                </div>
-                <div class="sidebar-bottom">
-                    <button class="btn btn-primary sidebar-add-lesson" onclick="showCreateProject()" style="width:100%; justify-content:center;">
-                        ➕ Bài Toán Mới
-                    </button>
-                </div>
-            </aside>
-
-            <!-- Main Workspace -->
-            <main class="main-panel" id="mainPanel">
-                <!-- Welcome state -->
-                <div class="welcome-state" id="welcomeState">
-                    <div class="welcome-icon">🎓</div>
-                    <h2 class="welcome-title">EduVideo Studio</h2>
-                    <p class="welcome-desc">Nền tảng tạo video giảng dạy tự động bằng AI. Hỗ trợ giải toán, lý, hóa step-by-step.</p>
-                    <button class="btn btn-primary btn-xl" onclick="showCreateProject()">
-                        ➕ Tạo Bài Toán Mới
-                    </button>
-                </div>
-
-                <!-- Editor state -->
-                <div class="editor-state" id="editorState" style="display:none">
-                    
-                    <!-- Tabs Nav -->
-                    <nav class="tabs">
-                        <button class="tab active" data-tab="raw">📋 Raw Content</button>
-                        <button class="tab" data-tab="script">📝 Script</button>
-                        <button class="tab" data-tab="extract">🎨 Extract</button>
-                        <button class="tab" data-tab="audio">🎵 Audio</button>
-                        <button class="tab" data-tab="preview">🎬 Preview</button>
-                        <button class="tab" data-tab="export">📤 Export</button>
-                    </nav>
-
-                    <!-- TAB: Raw Content (Vision AI output only) -->
-                    <section class="tab-panel active" id="panel-raw">
-                        <div class="stream-panel">
-                            <div class="stream-header">
-                                <div class="stream-status-dot" id="streamDot"></div>
-                                <h3 id="streamTitle">👁️ Nội dung phân tích (Vision AI)</h3>
-                                <span class="stream-stage-badge" id="streamStageBadge">--</span>
-                            </div>
-                            <div class="stream-output" id="streamOutput" style="min-height:200px;">
-                                <div style="text-align:center;padding:60px 20px;color:var(--text-3);font-size:13px;">Chưa có dữ liệu. Bấm <strong>▶️ Phân tích</strong> hoặc chạy Autopilot.</div>
-                            </div>
-                            <div class="stream-footer" style="display:flex; justify-content:space-between; align-items:center;">
-                                <span id="streamStats" class="stream-stats"></span>
-                                <div style="display:flex;gap:6px;">
-                                    <button class="btn" onclick="manualAnalyze()" id="btnManualAnalyze" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;">▶️ Phân tích</button>
-                                    <button class="btn" onclick="copyRawContent()" style="background:var(--bg-1);color:var(--text-1);border:1px solid var(--border-color);border-radius:4px;padding:4px 8px;font-size:12px;">📋 Copy</button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Hidden storage for raw results -->
-                        <div style="display:none;">
-                            <pre class="raw-content" id="rawStage1Output">Chưa có dữ liệu.</pre>
-                            <pre class="raw-content" id="rawStage2Output"></pre>
-                        </div>
-                    </section>
-
-                    <!-- TAB: Script -->
-                    <section class="tab-panel" id="panel-script">
-                        <div class="script-header">
-                            <h2 id="scriptTitle">Kịch bản chi tiết</h2>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <!-- Card / JSON toggle -->
-                                <div style="display:flex;background:var(--bg-1);border-radius:8px;border:1px solid var(--border);overflow:hidden">
-                                    <button id="scriptViewCard" class="btn-view-toggle active" onclick="setScriptView('card')" title="Card view">📝 Card</button>
-                                    <button id="scriptViewJson" class="btn-view-toggle" onclick="setScriptView('json')" title="JSON view">{} JSON</button>
-                                </div>
-                                <button class="btn" onclick="regenerateScript()">🔄 Tạo lại Script</button>
-                            </div>
-                        </div>
-                        <div id="stepsContainer" class="steps-list">
-                            <div class="empty-state">
-                                <span style="font-size:48px; opacity:0.5;">📋</span>
-                                <p class="text-muted" style="margin-top:10px;">Chưa có kịch bản.</p>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- TAB: Extract (Image Generation) -->
-                    <section class="tab-panel" id="panel-extract">
-                        <div style="padding:20px;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                                <div>
-                                    <h2 style="margin:0 0 4px;font-size:1.1rem;">🎨 Tạo ảnh minh họa</h2>
-                                    <p style="margin:0;color:var(--text-3);font-size:12px;">Tạo ảnh AI cho từng step trước khi tạo voice timing</p>
-                                </div>
-                                <div style="display:flex;gap:8px;">
-                                    <button class="btn" onclick="refreshExtractTab()" title="Làm mới trạng thái">🔄 Làm mới</button>
-                                    <button class="btn btn-primary" id="btnBatchGenImages" onclick="batchGenerateImages()">✨ Tạo tất cả ảnh</button>
-                                </div>
-                            </div>
-
-                            <!-- Batch progress -->
-                            <div id="batchImgStatus" style="display:none;margin-bottom:16px;background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
-                                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                                    <div class="spinner"></div>
-                                    <span id="batchImgMsg" style="font-size:13px;font-weight:600;">Đang tạo ảnh...</span>
-                                    <button onclick="stopBatchImages()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:11px;">⏹ Dừng</button>
-                                </div>
-                                <div class="progress-bar"><div class="progress-fill" id="batchImgProgress"></div></div>
-                            </div>
-
-                            <!-- Step image list -->
-                            <div id="extractStepList" style="display:flex;flex-direction:column;gap:10px;">
-                                <div class="empty-state">
-                                    <span style="font-size:32px;opacity:0.4;">🎨</span>
-                                    <p class="text-muted" style="margin-top:8px;font-size:12px;">Chọn một bài để xem trạng thái ảnh từng step.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- TAB: Audio -->
-                    <section class="tab-panel" id="panel-audio">
-                        <div style="padding:20px;max-width:640px;margin:0 auto;">
-                            <h2 style="margin:0 0 6px;font-size:1.1rem;">🎵 Tạo Voice Timing</h2>
-                            <p style="margin:0 0 20px;color:var(--text-3);font-size:12px;">Sinh audio TTS cho từng step và tạo timing map đồng bộ với canvas</p>
-
-                            <!-- Image warning -->
-                            <div id="audioImgWarning" style="display:none;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.4);border-radius:10px;padding:12px 16px;margin-bottom:16px;">
-                                <div style="display:flex;align-items:center;gap:10px;">
-                                    <span style="font-size:1.3rem;">⚠️</span>
-                                    <div>
-                                        <div style="font-weight:700;font-size:13px;color:#fbbf24;">Còn <span id="audioImgWarnCount">?</span> step chưa có ảnh</div>
-                                        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">Hãy vào tab <strong>Extract</strong> tạo ảnh trước để đồng bộ tốt hơn.</div>
-                                    </div>
-                                    <button onclick="switchTab('extract')" style="margin-left:auto;background:rgba(217,119,6,0.2);border:1px solid rgba(217,119,6,0.5);color:#fbbf24;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">→ Extract</button>
-                                </div>
-                            </div>
-
-                            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <label style="font-weight:600;font-size:13px;">🗣️ Giọng đọc</label>
-                                    <div style="display:flex;flex-direction:column;gap:6px;">
-                                        <div style="display:flex;gap:6px;">
-                                            <select id="audioLangFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc ngôn ngữ">
-                                                <option value="">🌐 Tất cả ngôn ngữ</option>
-                                            </select>
-                                            <select id="audioProviderFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc engine">
-                                                <option value="">🔌 Tất cả engine</option>
-                                            </select>
-                                        </div>
-                                        <select id="audioVoiceSelect" class="select-input" style="width:100%;">
-                                            <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <div>
-                                        <div style="font-weight:600;font-size:13px;">📊 Trạng thái script</div>
-                                        <div id="audioScriptInfo" style="font-size:11px;color:var(--text-3);margin-top:3px;">Chưa có script</div>
-                                    </div>
-                                    <button class="btn btn-primary" id="btnGenAudio2" onclick="generateAudio()">🎵 Tạo Voice Timing</button>
-                                </div>
-                            </div>
-
-                            <!-- Audio Status -->
-                            <div id="audioStatus" class="status-bar hidden" style="margin-top:16px;">
-                                <div class="spinner"></div>
-                                <span id="audioMsg">Đang tạo voice...</span>
-                                <div class="progress-bar"><div class="progress-fill" id="audioProgress"></div></div>
-                            </div>
-
-                            <!-- Timing summary -->
-                            <div id="audioTimingInfo" style="display:none;margin-top:16px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.3);border-radius:10px;padding:14px 16px;">
-                                <div style="font-weight:700;font-size:13px;color:#00ff88;">✅ Voice Timing sẵn sàng</div>
-                                <div id="audioTimingDetail" style="font-size:11px;color:var(--text-3);margin-top:4px;"></div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- MODAL: Step Edit Dialog -->
-                    <div id="stepEditModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;" onclick="if(event.target===this)closeStepEdit()">
-                        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:16px;width:min(660px,96vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
-                            <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-                                <h3 style="margin:0;font-size:15px;">✏️ Chỉnh sửa Step <span id="editStepNum"></span></h3>
-                                <button onclick="closeStepEdit()" style="background:none;border:none;color:var(--text-2);font-size:22px;cursor:pointer;line-height:1;padding:0 4px;">&times;</button>
-                            </div>
-                            <div style="padding:16px 20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;">
-                                <div>
-                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">🎤 Voice Text (giọng đọc)</label>
-                                    <textarea id="editVoiceText" rows="3" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-3);border:1px solid var(--border);border-radius:8px;color:var(--text-1);font-size:13px;resize:vertical;font-family:inherit;line-height:1.5;"></textarea>
-                                </div>
-                                
-                                <!-- ChatGPT Image Gen Section -->
-                                <div style="background:var(--bg-3);border:1px dashed var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
-                                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                                        <label style="font-size:12px;color:var(--text-2);font-weight:600;margin:0;">🎨 Tạo ảnh minh họa (ChatGPT)</label>
-                                        <select id="chatgptProfile" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);border-radius:4px;padding:2px 6px;font-size:11px;">
-                                            <option value="youtube6">youtube6 (Default)</option>
-                                            <option value="youtube5">youtube5</option>
-                                            <option value="test">test</option>
-                                        </select>
-                                        <select id="chatgptSize" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);border-radius:4px;padding:2px 6px;font-size:11px;margin-left:4px;">
-                                            <option value="1:1">1:1 (Vuông)</option>
-                                            <option value="16:9">16:9 (Ngang)</option>
-                                            <option value="9:16">9:16 (Dọc)</option>
-                                        </select>
-                                    </div>
-                                    <textarea id="chatgptPrompt" rows="2" placeholder="Prompt (ví dụ: Vẽ lại hình minh họa giáo dục này theo phong cách vector 2D, không chèn chữ, nền tối...)" style="width:100%;box-sizing:border-box;padding:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:12px;resize:vertical;"></textarea>
-                                    <div style="display:flex;justify-content:flex-end;">
-                                        <button class="btn btn-primary" onclick="generateChatGPTImage()" id="btnGenerateChatGPT" style="font-size:11px;padding:4px 12px;display:flex;align-items:center;gap:6px;">
-                                            <span id="chatgptSpinner" style="display:none;width:12px;height:12px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></span>
-                                            ✨ Tạo Ảnh (Dùng ảnh gốc làm gốc)
-                                        </button>
-                                    </div>
-                                </div>
-                                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
-
-                                <div>
-                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">📦 Elements JSON (canvas elements)</label>
-                                    <textarea id="editElementsJson" rows="14" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;color:#7dd3fc;font-size:12px;resize:vertical;font-family:'Courier New',Consolas,monospace;line-height:1.5;"></textarea>
-                                    <span id="editJsonError" style="font-size:11px;color:#ef4444;margin-top:4px;display:none;"></span>
-                                </div>
-                            </div>
-                            <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
-                                <button class="btn" onclick="closeStepEdit()">Hủy</button>
-                                <button class="btn btn-primary" onclick="saveStepEdit()">💾 Lưu thay đổi</button>
-                            </div>
-                        </div>
-                    </div>
-
-
-                    <!-- TAB: Preview -->
-                    <section class="tab-panel" id="panel-preview">
-                        <div class="preview-container">
-                            <div class="phone-frame">
-                                <canvas id="previewCanvas" width="1080" height="1920"></canvas>
-                            </div>
-                            <div class="preview-controls">
-                                <button class="btn btn-primary" id="btnPlay" onclick="togglePreview()">▶️ Play</button>
-                                <input type="range" id="seekBar" min="0" max="100" value="0" class="seek-bar">
-                                <span id="timeDisplay">0:00 / 0:00</span>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- TAB: Export -->
-                    <section class="tab-panel" id="panel-export">
-                        <div class="card" style="max-width:600px; margin:0 auto; text-align:center; padding:40px;">
-                            <h2 style="color:var(--accent); margin-bottom:12px; font-size:1.5rem;">📤 Export Video</h2>
-                            <p class="text-muted" style="margin-bottom:30px;">Render video MP4 (1080×1920) với animation và voice đồng bộ</p>
-                            
-                            <div style="text-align:left; margin-bottom:30px;">
-                                <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
-                                    <span class="text-muted">Render Mode:</span>
-                                    <select id="renderMode" class="select-input" style="width:200px; padding:6px 10px;">
-                                        <option value="pipe">⚡ Pipe (nhanh)</option>
-                                        <option value="frames">🖼️ Frames (ổn định)</option>
-                                    </select>
-                                </div>
-                                <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
-                                    <span class="text-muted">Encoder:</span>
-                                    <select id="gpuEncoder" class="select-input" style="width:200px; padding:6px 10px;">
-                                        <option value="cpu">🖥️ CPU (libx264)</option>
-                                        <option value="nvenc" selected>🟢 NVIDIA GPU (h264_nvenc)</option>
-                                        <option value="qsv">🔵 Intel QSV (h264_qsv)</option>
-                                        <option value="amf">🔴 AMD AMF (h264_amf)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            
-                            <button class="btn btn-primary btn-xl" id="btnRender" onclick="renderVideo()">🎬 Render Video</button>
-                            
-                            <div id="renderStatus" class="status-bar hidden" style="margin-top:20px;text-align:left;">
-                                <div class="spinner"></div>
-                                <span id="renderMsg">Rendering...</span>
-                                <div class="progress-bar"><div class="progress-fill" id="renderProgress"></div></div>
-                            </div>
-                            
-                            <div id="downloadArea" class="hidden" style="margin-top:20px;">
-                                <a id="downloadLink" class="btn btn-success btn-xl" href="#" target="_blank">⬇️ Download Video</a>
-                            </div>
-                        </div>
-                    </section>
-
-                </div>
-            </main>
-
-            <!-- Right Sidebar (Gallery) -->
-            <aside class="gallery-sidebar" id="galleryPanel">
-                <div class="gallery-header" style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h3>🖼️ Thư viện nguyên liệu</h3>
-                        <p>Icon, hình khối, trang trí</p>
-                    </div>
-                    <button class="btn-icon" onclick="showAddCategoryModal()" title="Thêm danh mục">➕</button>
-                </div>
-                
-                <div style="padding: 10px;">
-                    <select id="galleryCategorySelect" class="select-input" onchange="loadGalleryItems()" style="width:100%;">
-                        <option value="">Tất cả danh mục</option>
-                    </select>
-                </div>
-
-                <div class="gallery-content" id="galleryContent">
-                    <div class="empty-state" style="grid-column: span 2; padding:40px 10px;">
-                        <span style="font-size:32px;opacity:0.3;">🖼️</span>
-                        <p class="text-muted" style="margin-top:10px;font-size:11px;">Chưa có tài nguyên nào.</p>
-                    </div>
-                </div>
-                <div class="gallery-footer">
-                    <input type="file" id="galleryFileInput" hidden accept="image/*, .svg">
-                    <button class="btn btn-primary" onclick="document.getElementById('galleryFileInput').click()" style="width:100%; justify-content:center;">⬆️ Upload Asset</button>
-                </div>
-            </aside>
-        </div>
-    </div>
-
-    <!-- Modals -->
-    <!-- Gallery Category Modal -->
-    <div id="categoryModal" class="modal hidden">
-        <div class="modal-content" style="max-width: 400px;">
-            <div class="modal-header">
-                <h2>➕ Thêm danh mục mới</h2>
-                <button class="close-btn" onclick="closeModal('categoryModal')">✕</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Tên danh mục</label>
-                    <input type="text" id="catName" class="input" placeholder="VD: Icons">
-                </div>
-                <div class="form-group">
-                    <label>Icon hiển thị (Emoji)</label>
-                    <input type="text" id="catIcon" class="input" placeholder="VD: 🌟" value="📁">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeModal('categoryModal')">Hủy</button>
-                <button class="btn btn-primary" onclick="submitCreateCategory()">Tạo</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modals -->
-
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <!--  NEW PROJECT WIZARD MODAL (3 Steps)                    -->
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <div id="projectModal" class="modal hidden">
-        <div class="modal-content wizard-modal">
-            <!-- Step Indicator -->
-            <div class="wizard-steps">
-                <div class="wizard-step-item active" id="wStep1"><span class="wstep-num">1</span> Nhập liệu</div>
-                <div class="wizard-divider">›</div>
-                <div class="wizard-step-item" id="wStep2"><span class="wstep-num">2</span> AI Phân tích</div>
-                <div class="wizard-divider">›</div>
-                <div class="wizard-step-item" id="wStep3"><span class="wstep-num">3</span> Xác nhận</div>
-                <button class="close-btn" onclick="closeModal('projectModal')" style="margin-left:auto">✕</button>
-            </div>
-
-            <!-- ── STEP 1: Input ──────────────────────────────── -->
-            <div id="wizardStep1" class="wizard-pane active">
-                <div class="modal-body" style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
-
-                    <!-- Project title -->
-                    <div>
-                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px;">📌 Tên project</label>
-                        <input type="text" id="projTitle" class="input" placeholder="VD: Toán lớp 4 - Đặt tính cộng trừ" style="width:100%;box-sizing:border-box;">
-                    </div>
-
-                    <!-- Input tabs: Ảnh/PDF | Text -->
-                    <div>
-                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">📥 Nội dung đề bài</label>
-                        <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:8px;">
-                            <button id="inputTabImg" onclick="switchInputTab('img')" style="flex:1;padding:7px 10px;background:var(--accent);color:#000;border:none;font-size:12px;font-weight:600;cursor:pointer;">📸 Ảnh / PDF</button>
-                            <button id="inputTabText" onclick="switchInputTab('text')" style="flex:1;padding:7px 10px;background:var(--bg-3);color:var(--text-2);border:none;border-left:1px solid var(--border);font-size:12px;font-weight:600;cursor:pointer;">✏️ Nhập text</button>
-                        </div>
-
-                        <!-- Image upload pane -->
-                        <div id="inputPaneImg">
-                            <div id="wizardDropZone" class="wizard-drop-zone" style="padding:16px 10px;min-height:80px;" onclick="document.getElementById('wizardImageInput').click()">
-                                <div id="wizardDropContent">
-                                    <div style="font-size:1.6rem;margin-bottom:4px">📸</div>
-                                    <div style="font-weight:600;font-size:13px">Kéo thả ảnh / PDF vào đây</div>
-                                    <div class="text-muted" style="font-size:11px;margin-top:3px">hoặc click để chọn file</div>
-                                </div>
-                                <input type="file" id="wizardImageInput" accept="image/*,application/pdf" hidden>
-                            </div>
-                        </div>
-
-                        <!-- Text input pane (hidden by default) -->
-                        <div id="inputPaneText" style="display:none;">
-                            <textarea id="wizardTextInput" class="input" rows="4" placeholder="Nhập nội dung đề bài bằng text..." style="width:100%;box-sizing:border-box;resize:vertical;"></textarea>
-                        </div>
-                    </div>
-
-                    <!-- Two option rows: Video mode + Illustration (compact inline) -->
-                    <div style="display:flex;gap:10px;">
-                        <!-- Video mode -->
-                        <div style="flex:1;">
-                            <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">🎬 Chế độ</label>
-                            <div style="display:flex;gap:6px;">
-                                <label id="vmCardMulti" onclick="selectVideoMode('multi')" style="flex:1;border:1px solid var(--accent);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
-                                    <input type="radio" name="videoMode" value="multi" checked hidden>
-                                    <div style="font-size:1.2rem">📚</div>
-                                    <div style="font-size:11px;font-weight:600;margin-top:2px">N video</div>
-                                </label>
-                                <label id="vmCardSingle" onclick="selectVideoMode('single')" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
-                                    <input type="radio" name="videoMode" value="single" hidden>
-                                    <div style="font-size:1.2rem">🎬</div>
-                                    <div style="font-size:11px;font-weight:600;margin-top:2px">1 video</div>
-                                </label>
-                            </div>
-                        </div>
-                        <!-- Illustration mode -->
-                        <div style="flex:1;">
-                            <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">🖼️ Hình minh họa</label>
-                            <div style="display:flex;gap:6px;">
-                                <label id="illCardCanvas" onclick="selectIllustrationMode('canvas')" style="flex:1;border:1px solid var(--accent);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
-                                    <input type="radio" name="illustrationMode" value="canvas" checked hidden>
-                                    <div style="font-size:1.2rem">📐</div>
-                                    <div style="font-size:11px;font-weight:600;margin-top:2px">Hình học</div>
-                                </label>
-                                <label id="illCardChatgpt" onclick="selectIllustrationMode('chatgpt')" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
-                                    <input type="radio" name="illustrationMode" value="chatgpt" hidden>
-                                    <div style="font-size:1.2rem">🤖</div>
-                                    <div style="font-size:11px;font-weight:600;margin-top:2px">ChatGPT</div>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Language select -->
-                    <div style="display:flex;align-items:center;gap:10px;">
-                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">🌐 Ngôn ngữ</label>
-                        <select id="langSelect" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:6px 10px;font-size:13px;">
-                            <option value="vi">🇻🇳 Tiếng Việt</option>
-                            <option value="en">🇺🇸 English</option>
-                            <option value="zh">🇨🇳 中文 (Tiếng Trung)</option>
-                            <option value="ja">🇯🇵 日本語 (Tiếng Nhật)</option>
-                            <option value="ko">🇰🇷 한국어 (Tiếng Hàn)</option>
-                            <option value="fr">🇫🇷 Français (Tiếng Pháp)</option>
-                            <option value="de">🇩🇪 Deutsch (Tiếng Đức)</option>
-                            <option value="es">🇪🇸 Español (Tiếng Tây Ban Nha)</option>
-                            <option value="pt">🇧🇷 Português (Tiếng Bồ Đào Nha)</option>
-                            <option value="ar">🇸🇦 العربية (Tiếng Ả Rập)</option>
-                            <option value="th">🇹🇭 ภาษาไทย (Tiếng Thái)</option>
-                            <option value="id">🇮🇩 Bahasa Indonesia</option>
-                        </select>
-                    </div>
-
-                    <!-- ChatGPT profile (only shows when chatgpt mode selected) -->
-                    <div id="chatgptProfileRow" style="display:none;align-items:center;gap:8px;background:var(--bg-3);border-radius:6px;padding:8px 10px;">
-                        <span style="font-size:12px;color:var(--text-3);">🌐 Profile trình duyệt:</span>
-                        <select id="wizardChatgptProfile" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:4px 8px;font-size:12px;">
-                            <option value="youtube6">youtube6 (Default)</option>
-                            <option value="youtube5">youtube5</option>
-                            <option value="test">test</option>
-                        </select>
-                        <select id="wizardChatgptSize" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:4px 8px;font-size:12px;margin-left:4px;">
-                            <option value="1:1">1:1 (Vuông)</option>
-                            <option value="16:9">16:9 (Ngang)</option>
-                            <option value="9:16">9:16 (Dọc)</option>
-                        </select>
-                    </div>
-
-                </div>
-                <div class="modal-footer" style="padding:10px 20px;">
-                    <button class="btn" onclick="closeModal('projectModal')">Hủy</button>
-                    <button class="btn btn-primary" onclick="wizardGoScan()" style="gap:6px;">🤖 AI Phân tích →</button>
-                </div>
-            </div>
-
-
-            <!-- ── STEP 2: AI Scan ────────────────────────────── -->
-            <div id="wizardStep2" class="wizard-pane hidden">
-                <div class="modal-body">
-                    <div id="wizardScanLoading" style="text-align:center;padding:40px 20px">
-                        <div class="spinner" style="margin:0 auto 16px;width:32px;height:32px"></div>
-                        <div style="font-weight:600;font-size:1rem">🤖 AI đang đọc và đếm số bài...</div>
-                        <div class="text-muted" style="font-size:13px;margin-top:8px">Vision AI đang phân tích nội dung đề bài</div>
-                    </div>
-                    <div id="wizardScanResult" class="hidden">
-                        <div class="wizard-scan-summary" id="wizardScanSummary"></div>
-                        <div style="margin:16px 0 8px;font-weight:600;font-size:0.9rem">📋 Danh sách bài sẽ tạo:</div>
-                        <div id="wizardLessonList" class="wizard-lesson-list"></div>
-                        <div style="margin-top:12px;font-size:12px;color:var(--text-3)">
-                            💡 Bấm vào tên để sửa. Dùng ➕ để thêm bài, ✕ để xoá.
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn" onclick="wizardGoBack()">← Quay lại</button>
-                    <button class="btn btn-primary" id="wizardConfirmBtn" onclick="wizardGoConfirm()" disabled>Xác nhận →</button>
-                </div>
-            </div>
-
-            <!-- ── STEP 3: Confirm & Run ──────────────────────── -->
-            <div id="wizardStep3" class="wizard-pane hidden">
-                <div class="modal-body">
-                    <div class="wizard-confirm-box">
-                        <div style="font-size:2.5rem;margin-bottom:12px">🚀</div>
-                        <h3 id="wizardConfirmTitle" style="color:var(--accent);margin-bottom:8px"></h3>
-                        <div id="wizardConfirmSummary" class="text-muted" style="font-size:14px;margin-bottom:16px"></div>
-                        <div id="wizardConfirmList" style="text-align:left;margin-bottom:16px"></div>
-                        <div style="margin-bottom:16px">
-                            <div style="font-weight:600;margin-bottom:8px">🎞️ Render Mode:</div>
-                            <div style="display:flex;gap:8px">
-                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
-                                    <input type="radio" name="wizardRenderMode" value="pipe" checked>
-                                    <div><strong>⚡ Pipe</strong> <span class="text-muted" style="font-size:11px">(nhanh)</span></div>
-                                </label>
-                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
-                                    <input type="radio" name="wizardRenderMode" value="frames">
-                                    <div><strong>🖼️ Frames</strong> <span class="text-muted" style="font-size:11px">(ổn định)</span></div>
-                                </label>
-                            </div>
-                        </div>
-                        <div class="wizard-run-mode">
-                            <div style="font-weight:600;margin-bottom:10px">⚙️ Chế độ chạy:</div>
-                            <div style="display:flex;flex-direction:column;gap:8px">
-                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:var(--bg-3);padding:12px;border-radius:8px;border:1px solid var(--border)">
-                                    <input type="radio" name="wizardRunMode" value="manual" style="margin-top:3px">
-                                    <div>
-                                        <strong>🖐️ Manual</strong>
-                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tạo project & lesson, tôi sẽ tự chạy từng bài</div>
-                                    </div>
-                                </label>
-                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:rgba(255,215,0,0.05);padding:12px;border-radius:8px;border:1px solid rgba(255,215,0,0.3)">
-                                    <input type="radio" name="wizardRunMode" value="autopilot" checked style="margin-top:3px">
-                                    <div>
-                                        <strong style="color:var(--accent)">🤖 Full Autopilot</strong>
-                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tự động chạy theo tab: Raw Content → Script → Render cho TẤT CẢ bài</div>
-                                    </div>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn" onclick="wizardGoScanStep()">← Quay lại</button>
-                    <button class="btn btn-primary" id="wizardRunBtn" onclick="wizardRun()" style="background:linear-gradient(135deg,#FFD700,#FDB931);color:#000">▶️ Tạo và Chạy Tự động</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-
-
-
-    <!-- AI Settings Modal -->
-    <div id="aiSettingsModal" class="modal hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>⚙️ Cài đặt AI</h2>
-                <button class="close-btn" onclick="closeAISettingsModal()">✕</button>
-            </div>
-            <div class="modal-body" style="max-height: 60vh;">
-                <!-- VISION AI -->
-                <h3 style="font-size:13px; color:var(--accent); margin-bottom:10px;">👁️ Vision AI (Phân tích)</h3>
-                <div class="form-group">
-                    <div class="radio-group">
-                        <label><input type="radio" name="visionSource" value="cloud" checked onclick="toggleAISource('vision')"> Hệ thống (Cloud)</label>
-                        <label><input type="radio" name="visionSource" value="custom" onclick="toggleAISource('vision')"> Custom API</label>
-                    </div>
-                </div>
-                <div id="visionCloudAiSettings" class="settings-section">
-                    <div class="form-group"><label>Provider</label><select id="visionCloudProvider" class="select-input" onchange="loadCloudModels('vision')"></select></div>
-                    <div class="form-group"><label>Model</label><select id="visionCloudModel" class="select-input"></select></div>
-                </div>
-                <div id="visionCustomAiSettings" class="settings-section hidden">
-                    <div class="form-group"><label>Base URL</label><input type="text" id="visionCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1"></div>
-                    <div class="form-group"><label>API Key</label><input type="password" id="visionCustomApiKey" class="input" placeholder="Nhập API Key nếu có"></div>
-                    <div class="form-group"><label>Model Name</label><input type="text" id="visionCustomModel" class="input" placeholder="llava, gpt-4-vision..."></div>
-                </div>
-                <!-- SCRIPT AI -->
-                <h3 style="font-size:13px; color:var(--cyan); margin-top:24px; margin-bottom:10px;">🧠 Script AI (Viết kịch bản)</h3>
-                <div class="form-group">
-                    <div class="radio-group">
-                        <label><input type="radio" name="scriptSource" value="cloud" checked onclick="toggleAISource('script')"> Hệ thống (Cloud)</label>
-                        <label><input type="radio" name="scriptSource" value="custom" onclick="toggleAISource('script')"> Custom API</label>
-                    </div>
-                </div>
-                <div id="scriptCloudAiSettings" class="settings-section">
-                    <div class="form-group"><label>Provider</label><select id="scriptCloudProvider" class="select-input" onchange="loadCloudModels('script')"></select></div>
-                    <div class="form-group"><label>Model</label><select id="scriptCloudModel" class="select-input"></select></div>
-                </div>
-                <div id="scriptCustomAiSettings" class="settings-section hidden">
-                    <div class="form-group"><label>Base URL</label><input type="text" id="scriptCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1"></div>
-                    <div class="form-group"><label>API Key</label><input type="password" id="scriptCustomApiKey" class="input" placeholder="Nhập API Key nếu có"></div>
-                    <div class="form-group"><label>Model Name</label><input type="text" id="scriptCustomModel" class="input" placeholder="llama3, gpt-4..."></div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeAISettingsModal()">Hủy</button>
-                <button class="btn btn-primary" onclick="saveAISettings()">Lưu Cài Đặt</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Floating Stop Autopilot Button (like Pod Studio) -->
-    <button id="floatStopBtn" class="btn btn-danger" style="display:none; position:fixed; bottom:30px; right:30px; z-index:9999; box-shadow:0 8px 30px rgba(0,0,0,0.5); padding:15px 25px; border-radius:30px; font-weight:600; font-size:14px;" onclick="stopAutopilot()">
-        ⏹ STOP AUTO-PILOT
-    </button>
-
-    <script src="/edu-video-studio-static/edu_studio.js?v=20260516e"></script>
-</body>
-</html>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎓 EduVideo Studio — TubeCreate</title>
+    <meta name="description" content="Tạo video dạy học step-by-step với AI">
+    <link rel="stylesheet" href="/edu-video-studio-static/edu_studio.css">
+    <link rel="preload" href="/edu-video-studio-static/YouthTouch.ttf" as="font" type="font/ttf" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&family=Outfit:wght@100..900&family=Press+Start+2P&family=Architects+Daughter&family=Fredoka:wght@300..700&family=Orbitron:wght@400..900&family=Pangolin&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    <script src="/static/i18n.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Topbar -->
+        <header class="app-header">
+            <div class="header-left">
+                <span class="header-icon">🎓</span>
+                <div>
+                    <h1 class="header-title">EduVideo Studio</h1>
+                    <span class="header-subtitle">Tạo video dạy học step-by-step với AI</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div id="aiStatusBadge" class="ai-status-badge" onclick="openAISettingsModal()" title="Cài đặt AI">
+                    <span class="ai-dot" id="aiStatusDot"></span>
+                    <span id="aiStatusText">Đang tải...</span>
+                </div>
+                <select id="themeSelect" class="select-input" onchange="updateTheme()">
+                    <option value="dark">🌙 Dark</option>
+                    <option value="whiteboard">📝 Whiteboard</option>
+                    <option value="chalkboard">🏫 Chalkboard</option>
+                </select>
+                <select id="styleSelect" class="select-input" onchange="updateArtStyle()" style="margin-left: 8px;">
+                    <option value="default">✨ Default Style</option>
+                    <option disabled>── Artistic ──</option>
+                    <option value="cyberpunk">🌃 Cyberpunk Neon</option>
+                    <option value="watercolor">🎨 Watercolor Painting</option>
+                    <option value="inkwash">🖌️ Ink Wash Painting</option>
+                    <option value="pastel">🌸 Soft Pastel Colors</option>
+                    <option value="pixel">👾 Pixel Art (8-bit)</option>
+                    <option value="sketch">✏️ B&W Hand-drawn Sketch</option>
+                    <option value="sketchnote">📝 Sketchnote (Mực Màu Vẽ Tay)</option>
+                    <option value="cartoon">🧸 Cartoonish</option>
+                            <option value="liquidglass">🧊 Liquid Glass (Kính Lỏng)</option>
+                </select>
+                <div style="display:flex; align-items:center; gap:4px; margin-left:8px; background:var(--bg-secondary); padding:4px 8px; border-radius:6px; border:1px solid var(--border-color);">
+                    <label for="customBgColor" style="font-size:12px; color:var(--text-secondary); cursor:pointer;">Nền:</label>
+                    <input type="color" id="customBgColor" title="Tuỳ biến màu nền" onchange="updateCustomBg()" style="width:24px; height:24px; padding:0; border:none; cursor:pointer; background:transparent;">
+                    <input type="text" id="customBgHex" placeholder="#0a0a1a" style="width:65px; font-size:12px; font-family:monospace; background:transparent; border:none; color:var(--text-color); outline:none;" onchange="updateCustomBgHex()">
+                </div>
+                <div id="voiceFilterGroup" style="display:flex;gap:6px;align-items:center;">
+                    <select id="voiceLangFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo ngôn ngữ">
+                        <option value="">🌐 Tất cả ngôn ngữ</option>
+                    </select>
+                    <select id="voiceProviderFilter" class="select-input" style="font-size:11px;padding:3px 6px;" onchange="filterVoices()" title="Lọc theo provider">
+                        <option value="">🔌 Tất cả engine</option>
+                    </select>
+                    <select id="voiceSelect" class="select-input" onchange="updateVoice()" style="min-width:160px;">
+                        <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
+                    </select>
+                </div>
+            </div>
+        </header>
+
+        <!-- Studio Body (3 columns) -->
+        <div class="studio-body">
+            
+            <!-- Left Sidebar (Projects) -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-head">
+                    <span class="sidebar-label">PROJECTS</span>
+                    <button class="btn-icon" onclick="showCreateProject()" title="Tạo project mới">➕</button>
+                </div>
+                <div class="sidebar-list" id="sidebarList">
+                    <!-- Populated by JS -->
+                </div>
+                <div class="sidebar-bottom">
+                    <button class="btn btn-primary sidebar-add-lesson" onclick="showCreateProject()" style="width:100%; justify-content:center;">
+                        ➕ Project Mới
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Main Workspace -->
+            <main class="main-panel" id="mainPanel">
+                <!-- Welcome state -->
+                <div class="welcome-state" id="welcomeState">
+                    <div class="welcome-icon">🎓</div>
+                    <h2 class="welcome-title">EduVideo Studio</h2>
+                    <p class="welcome-desc">Nền tảng tạo video giảng dạy tự động bằng AI. Hỗ trợ giải toán, lý, hóa step-by-step.</p>
+                    <button class="btn btn-primary btn-xl" onclick="showCreateProject()">
+                        ➕ Tạo Project Mới
+                    </button>
+                </div>
+
+                <!-- Editor state -->
+                <div class="editor-state" id="editorState" style="display:none">
+                    
+                    <!-- Tabs Nav -->
+                    <nav class="tabs" style="display:flex;align-items:center;gap:0;flex-wrap:wrap;">
+                        <button class="tab active" data-tab="raw">📋 Raw Content</button>
+                        <button class="tab" data-tab="script">📝 Script</button>
+                        <button class="tab" data-tab="extract">🎨 Extract</button>
+                        <button class="tab" data-tab="audio">🎵 Audio</button>
+                        <button class="tab" data-tab="preview">🎬 Preview</button>
+                        <button class="tab" data-tab="export">📤 Export</button>
+                        <button class="tab" data-tab="publish">🚀 Public</button>
+                        <!-- Skill selector in tab bar -->
+                        <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px;">
+                            <label style="font-size:11px;color:var(--text-3);white-space:nowrap;">⚡ Skill:</label>
+                            <select id="skillSelect"
+                                onchange="applySkillToProject(this.value)"
+                                style="background:var(--bg-1);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:600;cursor:pointer;min-width:160px;">
+                                <option value="">-- Đang tải... --</option>
+                            </select>
+                            <button class="btn-icon" onclick="openSkillsManager()" title="Quản lý Skills (Sửa/Thêm)" style="font-size:14px;padding:4px;width:26px;height:26px;border-radius:4px;background:var(--bg-3);border:1px solid var(--border);">⚙️</button>
+                        </div>
+                    </nav>
+
+                    <!-- TAB: Raw Content (Vision AI output only) -->
+                    <section class="tab-panel active" id="panel-raw">
+                        <div class="stream-panel">
+                            <div class="stream-header">
+                                <div class="stream-status-dot" id="streamDot"></div>
+                                <h3 id="streamTitle">👁️ Nội dung phân tích (Vision AI)</h3>
+                                <span class="stream-stage-badge" id="streamStageBadge">--</span>
+                            </div>
+                            <div class="stream-output" id="streamOutput" style="min-height:200px;">
+                                <div style="text-align:center;padding:60px 20px;color:var(--text-3);font-size:13px;">Chưa có dữ liệu. Bấm <strong>▶️ Phân tích</strong> hoặc chạy Autopilot.</div>
+                            </div>
+                            <div class="stream-footer" style="display:flex; justify-content:space-between; align-items:center;">
+                                <span id="streamStats" class="stream-stats"></span>
+                                <div style="display:flex;gap:6px;">
+                                    <button class="btn" onclick="manualAnalyze()" id="btnManualAnalyze" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;">▶️ Phân tích</button>
+                                    <button class="btn" onclick="copyRawContent()" style="background:var(--bg-1);color:var(--text-1);border:1px solid var(--border-color);border-radius:4px;padding:4px 8px;font-size:12px;">📋 Copy</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Hidden storage for raw results -->
+                        <div style="display:none;">
+                            <pre class="raw-content" id="rawStage1Output">Chưa có dữ liệu.</pre>
+                            <pre class="raw-content" id="rawStage2Output"></pre>
+                        </div>
+                    </section>
+
+                    <!-- TAB: Script -->
+                    <section class="tab-panel" id="panel-script">
+                        <div class="script-header">
+                            <h2 id="scriptTitle">Kịch bản chi tiết</h2>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <!-- Skill badge -->
+                                <span id="activeSkillBadge" title="Skill đang dùng" onclick="switchTab('skills')" style="cursor:pointer;font-size:11px;padding:3px 8px;border-radius:12px;background:var(--accent);color:#000;font-weight:700;display:none;"></span>
+                                <!-- Card / JSON toggle -->
+                                <div style="display:flex;background:var(--bg-1);border-radius:8px;border:1px solid var(--border);overflow:hidden">
+                                    <button id="scriptViewCard" class="btn-view-toggle active" onclick="setScriptView('card')" title="Card view">📝 Card</button>
+                                    <button id="scriptViewJson" class="btn-view-toggle" onclick="setScriptView('json')" title="JSON view">{} JSON</button>
+                                </div>
+                                <button class="btn" onclick="regenerateScript()">🔄 Tạo lại Script</button>
+                                <button class="btn" onclick="toggleClearAll()" id="btnClearAll" title="Bật/tắt clear cho tất cả step" style="font-size:12px;">🆕 Clear All</button>
+                                <button class="btn" onclick="openEffectsModal()" style="font-weight:700; background:linear-gradient(135deg, var(--accent) 0%, #ff9800 100%); color:#000; border:none; display:flex; align-items:center; gap:6px;">✨ Kho Hiệu Ứng</button>
+                            </div>
+                        </div>
+                        <div id="stepsContainer" class="steps-list">
+                            <div class="empty-state">
+                                <span style="font-size:48px; opacity:0.5;">📋</span>
+                                <p class="text-muted" style="margin-top:10px;">Chưa có kịch bản.</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB: Extract (Image Generation) -->
+                    <section class="tab-panel" id="panel-extract">
+                        <div style="padding:20px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                                <div>
+                                    <h2 style="margin:0 0 4px;font-size:1.1rem;">🎨 Tạo ảnh minh họa</h2>
+                                    <p style="margin:0;color:var(--text-3);font-size:12px;">Tạo ảnh AI cho từng step trước khi tạo voice timing</p>
+                                </div>
+                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                                    <select id="extractEngine" style="background:var(--bg-1);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;" title="AI Engine tạo ảnh">
+                                        <option value="chatgpt">🤖 ChatGPT</option>
+                                        <option value="grok">🧠 Grok</option>
+                                        <option value="veo3">🎨 Veo3</option>
+                                    </select>
+                                    <select id="extractChatgptProfile" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:5px 8px;font-size:11px;" title="Browser profile">
+                                        <option value="youtube6">⏳ Đang tải...</option>
+                                    </select>
+                                    <select id="extractChatgptSize" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:5px 8px;font-size:11px;" title="Tỉ lệ ảnh">
+                                        <option value="1:1">📐 1:1</option>
+                                        <option value="16:9">📐 16:9</option>
+                                        <option value="9:16">📐 9:16</option>
+                                    </select>
+                                    <button class="btn" onclick="refreshExtractTab()" title="Làm mới trạng thái">🔄 Làm mới</button>
+                                    <button class="btn btn-primary" id="btnBatchGenImages" onclick="batchGenerateImages()">✨ Tạo tất cả ảnh</button>
+                                    <button class="btn" id="btnRegenAllImages" onclick="regenAllImages()" style="border-color:var(--accent);color:var(--accent);" title="Tạo lại TẤT CẢ ảnh (kể cả đã có)">🔁 Tạo lại tất cả</button>
+                                </div>
+                            </div>
+
+                            <!-- Batch progress -->
+                            <div id="batchImgStatus" style="display:none;margin-bottom:16px;background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+                                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                                    <div class="spinner"></div>
+                                    <span id="batchImgMsg" style="font-size:13px;font-weight:600;">Đang tạo ảnh...</span>
+                                    <button onclick="stopBatchImages()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:11px;">⏹ Dừng</button>
+                                </div>
+                                <div class="progress-bar"><div class="progress-fill" id="batchImgProgress"></div></div>
+                            </div>
+
+                            <!-- Step image list -->
+                            <div id="extractStepList" style="display:flex;flex-direction:column;gap:10px;">
+                                <div class="empty-state">
+                                    <span style="font-size:32px;opacity:0.4;">🎨</span>
+                                    <p class="text-muted" style="margin-top:8px;font-size:12px;">Chọn một bài để xem trạng thái ảnh từng step.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB: Audio -->
+                    <section class="tab-panel" id="panel-audio">
+                        <div style="padding:20px;max-width:640px;margin:0 auto;">
+                            <h2 style="margin:0 0 6px;font-size:1.1rem;">🎵 Tạo Voice Timing</h2>
+                            <p style="margin:0 0 20px;color:var(--text-3);font-size:12px;">Sinh audio TTS cho từng step và tạo timing map đồng bộ với canvas</p>
+
+                            <!-- Image warning -->
+                            <div id="audioImgWarning" style="display:none;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.4);border-radius:10px;padding:12px 16px;margin-bottom:16px;">
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <span style="font-size:1.3rem;">⚠️</span>
+                                    <div>
+                                        <div style="font-weight:700;font-size:13px;color:#fbbf24;">Còn <span id="audioImgWarnCount">?</span> step chưa có ảnh</div>
+                                        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">Hãy vào tab <strong>Extract</strong> tạo ảnh trước để đồng bộ tốt hơn.</div>
+                                    </div>
+                                    <button onclick="switchTab('extract')" style="margin-left:auto;background:rgba(217,119,6,0.2);border:1px solid rgba(217,119,6,0.5);color:#fbbf24;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">→ Extract</button>
+                                </div>
+                            </div>
+
+                            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <label style="font-weight:600;font-size:13px;">🗣️ Giọng đọc</label>
+                                    <div style="display:flex;flex-direction:column;gap:6px;">
+                                        <div style="display:flex;gap:6px;">
+                                            <select id="audioLangFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc ngôn ngữ">
+                                                <option value="">🌐 Tất cả ngôn ngữ</option>
+                                            </select>
+                                            <select id="audioProviderFilter" class="select-input" style="flex:1;font-size:11px;" onchange="filterVoices()" title="Lọc engine">
+                                                <option value="">🔌 Tất cả engine</option>
+                                            </select>
+                                        </div>
+                                        <select id="audioVoiceSelect" class="select-input" style="width:100%;">
+                                            <option value="vi-VN-HoaiMyNeural">🇻🇳 Hoài My (Nữ)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <div>
+                                        <div style="font-weight:600;font-size:13px;">📊 Trạng thái script</div>
+                                        <div id="audioScriptInfo" style="font-size:11px;color:var(--text-3);margin-top:3px;">Chưa có script</div>
+                                    </div>
+                                    <button class="btn btn-primary" id="btnGenAudio2" onclick="generateAudio()">🎵 Tạo Voice Timing</button>
+                                </div>
+                            </div>
+
+                            <!-- Audio Status -->
+                            <div id="audioStatus" class="status-bar hidden" style="margin-top:16px;">
+                                <div class="spinner"></div>
+                                <span id="audioMsg">Đang tạo voice...</span>
+                                <div class="progress-bar"><div class="progress-fill" id="audioProgress"></div></div>
+                            </div>
+
+                            <!-- Timing summary -->
+                            <div id="audioTimingInfo" style="display:none;margin-top:16px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.3);border-radius:10px;padding:14px 16px;">
+                                <div style="font-weight:700;font-size:13px;color:#00ff88;">✅ Voice Timing sẵn sàng</div>
+                                <div id="audioTimingDetail" style="font-size:11px;color:var(--text-3);margin-top:4px;"></div>
+                            </div>
+
+                            <!-- Step audio cards -->
+                            <div id="audioStepList" style="margin-top:24px; display:flex; flex-direction:column; gap:16px;"></div>
+                        </div>
+                    </section>
+
+                    <!-- MODAL: Step Edit Dialog -->
+                    <div id="stepEditModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;" onclick="if(event.target===this)closeStepEdit()">
+                        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:16px;width:min(660px,96vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
+                            <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                                <h3 style="margin:0;font-size:15px;">✏️ Chỉnh sửa Step <span id="editStepNum"></span></h3>
+                                <button onclick="closeStepEdit()" style="background:none;border:none;color:var(--text-2);font-size:22px;cursor:pointer;line-height:1;padding:0 4px;">&times;</button>
+                            </div>
+                            <div style="padding:16px 20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;">
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">🎤 Voice Text (giọng đọc)</label>
+                                    <textarea id="editVoiceText" rows="3" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-3);border:1px solid var(--border);border-radius:8px;color:var(--text-1);font-size:13px;resize:vertical;font-family:inherit;line-height:1.5;"></textarea>
+                                </div>
+                                
+                                <!-- ChatGPT Image Gen Section -->
+                                <div style="background:var(--bg-3);border:1px dashed var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                                        <label style="font-size:12px;color:var(--text-2);font-weight:600;margin:0;">🎨 Tạo ảnh minh họa (ChatGPT)</label>
+                                        <select id="chatgptProfile" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);border-radius:4px;padding:2px 6px;font-size:11px;">
+                                            <option value="youtube6">youtube6 (Default)</option>
+                                            <option value="youtube5">youtube5</option>
+                                            <option value="test">test</option>
+                                        </select>
+                                        <select id="chatgptSize" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);border-radius:4px;padding:2px 6px;font-size:11px;margin-left:4px;">
+                                            <option value="1:1">1:1 (Vuông)</option>
+                                            <option value="16:9">16:9 (Ngang)</option>
+                                            <option value="9:16">9:16 (Dọc)</option>
+                                        </select>
+                                    </div>
+                                    <textarea id="chatgptPrompt" rows="2" placeholder="Prompt (ví dụ: Vẽ lại hình minh họa giáo dục này theo phong cách vector 2D, không chèn chữ, nền tối...)" style="width:100%;box-sizing:border-box;padding:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:12px;resize:vertical;"></textarea>
+                                    <div style="display:flex;justify-content:flex-end;">
+                                        <button class="btn btn-primary" onclick="generateChatGPTImage()" id="btnGenerateChatGPT" style="font-size:11px;padding:4px 12px;display:flex;align-items:center;gap:6px;">
+                                            <span id="chatgptSpinner" style="display:none;width:12px;height:12px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></span>
+                                            ✨ Tạo Ảnh (Dùng ảnh gốc làm gốc)
+                                        </button>
+                                    </div>
+                                </div>
+                                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+                                <!-- Manual Image Upload Section -->
+                                <div style="background:var(--bg-3);border:1px dashed var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                                        <label style="font-size:12px;color:var(--text-2);font-weight:600;margin:0;">📸 Upload ảnh thủ công</label>
+                                        <button class="btn" onclick="document.getElementById('manualStepImageUpload').click()" style="font-size:11px;padding:4px 12px;">
+                                            ⬆️ Chọn ảnh
+                                        </button>
+                                        <input type="file" id="manualStepImageUpload" accept="image/*" style="display:none;" onchange="uploadManualStepImage(event)">
+                                    </div>
+                                    <div id="manualUploadStatus" style="font-size:11px;color:var(--text-3);display:none;"></div>
+                                </div>
+
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-3);margin-bottom:5px;display:block;font-weight:600;">📦 Elements JSON (canvas elements)</label>
+                                    <textarea id="editElementsJson" rows="14" style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;color:#7dd3fc;font-size:12px;resize:vertical;font-family:'Courier New',Consolas,monospace;line-height:1.5;"></textarea>
+                                    <span id="editJsonError" style="font-size:11px;color:#ef4444;margin-top:4px;display:none;"></span>
+                                </div>
+                            </div>
+                            <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <button class="btn btn-primary" style="background-color: var(--accent); display:flex; align-items:center; gap:6px;" onclick="splitStepAI()" id="btnSplitAI">
+                                        <span id="splitSpinner" style="display:none;width:12px;height:12px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></span>
+                                        ✂️ Chia nhỏ Step bằng AI
+                                    </button>
+                                    <button class="btn" style="display:flex; align-items:center; gap:6px;" onclick="regenerateStepElementsAI()" id="btnRegenerateElements">
+                                        <span id="regenSpinner" style="display:none;width:12px;height:12px;border:2px solid var(--text);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></span>
+                                        🪄 Tạo lại Elements (AI)
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="openEffectsModal()" style="display:flex; align-items:center; gap:6px; font-weight:700; background:linear-gradient(135deg, var(--accent) 0%, #ff9800 100%); color:#000; border:none;">
+                                        ✨ Kho Hiệu Ứng
+                                    </button>
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="btn" onclick="closeStepEdit()">Hủy</button>
+                                    <button class="btn btn-primary" onclick="saveStepEdit()">💾 Lưu thay đổi</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <!-- TAB: Preview -->
+                    <section class="tab-panel" id="panel-preview">
+                        <div class="preview-layout" style="display: flex; gap: 20px; width: 100%; align-items: stretch; justify-content: center;">
+                            <!-- Left Side: Canvas Preview -->
+                            <div class="preview-canvas-column" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-1); border-radius: 12px; border: 1px solid var(--border); padding: 20px; position: relative;">
+                                <!-- Canvas Aspect Ratio Controls -->
+                                <div class="aspect-ratio-controls" style="position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 100;">
+                                    <button id="ratioBtn_9_16" class="btn" onclick="setPreviewAspect('9:16')" style="font-size: 11px; font-weight: 700; border-color: var(--accent); background: var(--accent-bg); color: var(--accent); padding: 4px 10px;">
+                                        📱 Dọc (9:16)
+                                    </button>
+                                    <button id="ratioBtn_16_9" class="btn" onclick="setPreviewAspect('16:9')" style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-color: var(--border);">
+                                        💻 Ngang (16:9)
+                                    </button>
+                                </div>
+                                
+                                <!-- Phone / Screen Frame containing the canvas -->
+                                <div class="phone-frame" id="previewPhoneFrame" style="flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; max-width: 100%; border: none; box-shadow: none; background: transparent; padding: 0; aspect-ratio: 9/16; max-height: calc(100vh - 280px);">
+                                    <canvas id="previewCanvas" width="1080" height="1920" style="cursor: crosshair; max-height: 100%; max-width: 100%; object-fit: contain; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow-md); background: #000;"></canvas>
+                                </div>
+                                
+                                <!-- Controls below canvas -->
+                                <div class="preview-controls" style="width: 100%; max-width: 500px; margin-top: 12px; display: flex; align-items: center; gap: 12px;">
+                                    <button class="btn btn-primary" id="btnPlay" onclick="togglePreview()">▶️ Play</button>
+                                    <input type="range" id="seekBar" min="0" max="100" value="0" class="seek-bar" style="flex: 1;">
+                                    <span id="timeDisplay" style="font-family: monospace; font-size: 11px; min-width: 80px; text-align: right; color: var(--text-2);">0:00 / 0:00</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Right Side: Layout & Element Editor -->
+                            <div class="layout-editor-column" style="width: 320px; display: flex; flex-direction: column; gap: 16px; flex-shrink: 0;">
+                                <!-- Info Card -->
+                                <div class="card" style="padding: 14px;">
+                                    <h3 style="color: var(--accent); font-size: 13px; margin: 0 0 6px; display: flex; align-items: center; gap: 6px;">📐 Kéo Thả & Zoom</h3>
+                                    <p style="color: var(--text-3); font-size: 11px; line-height: 1.4; margin: 0;">
+                                        Kéo thả trực tiếp đối tượng trên canvas để di chuyển vị trí, hoặc chỉnh sửa thuộc tính bên dưới.
+                                    </p>
+                                    <div style="margin-top: 10px; display: flex; gap: 8px;">
+                                        <button class="btn btn-success" onclick="saveActiveScriptLayout()" style="flex: 1; font-weight: 700; font-size: 11px; padding: 6px 12px; justify-content: center;">💾 Lưu Kịch Bản</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Element Selection & Properties Card -->
+                                <div class="card" style="padding: 14px; flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;">
+                                    <h3 style="font-size: 12px; color: var(--text-1); font-weight: 600; margin: 0;">📝 Chọn Đối Tượng</h3>
+                                    
+                                    <div>
+                                        <select id="selectedElementIndex" onchange="selectElementFromDropdown(this.value)" style="width: 100%; font-size: 11px; padding: 6px 8px; background: var(--bg-1); color: var(--text-1); border: 1px solid var(--border); border-radius: 6px;">
+                                            <option value="-1">-- Không có đối tượng --</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div id="elementEditorProps" style="display: none; flex-direction: column; gap: 12px; border-top: 1px solid var(--border); padding-top: 12px;">
+                                        <!-- Type and Content -->
+                                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                                            <span id="editorElType" class="stream-stage-badge" style="font-size: 9px; align-self: flex-start; padding: 2px 6px;">TEXT</span>
+                                            <div id="editorElContent" style="font-size: 11px; font-weight: 600; color: var(--text-1); word-break: break-all; max-height: 50px; overflow-y: auto; background: var(--bg-0); padding: 6px; border-radius: 4px; font-family: var(--font-mono); border: 1px solid var(--border);"></div>
+                                        </div>
+                                        
+                                        <!-- Font Size / Scale -->
+                                        <div>
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                                <label style="font-size: 11px; color: var(--text-2);">Cỡ chữ / Kích thước:</label>
+                                                <span id="editorFsVal" style="font-size: 11px; font-family: var(--font-mono); font-weight: 600; color: var(--accent);">40px</span>
+                                            </div>
+                                            <input type="range" id="editorFsInput" min="16" max="140" value="40" class="seek-bar" oninput="updateActiveElementFs(this.value)" style="width: 100%;">
+                                        </div>
+                                        
+                                        <!-- Position Coordinates -->
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                            <div>
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                                    <label style="font-size: 10px; color: var(--text-2);">Tọa độ X:</label>
+                                                    <span id="editorXVal" style="font-size: 10px; font-family: var(--font-mono); font-weight: 600;">0.50</span>
+                                                </div>
+                                                <input type="range" id="editorXInput" min="0" max="100" value="50" class="seek-bar" oninput="updateActiveElementCoords('x', this.value / 100)" style="width: 100%;">
+                                            </div>
+                                            <div>
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                                    <label style="font-size: 10px; color: var(--text-2);">Tọa độ Y:</label>
+                                                    <span id="editorYVal" style="font-size: 10px; font-family: var(--font-mono); font-weight: 600;">0.50</span>
+                                                </div>
+                                                <input type="range" id="editorYInput" min="0" max="100" value="50" class="seek-bar" oninput="updateActiveElementCoords('y', this.value / 100)" style="width: 100%;">
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Alignment -->
+                                        <div id="editorAlignRow">
+                                            <label style="font-size: 11px; color: var(--text-2); display: block; margin-bottom: 4px;">Căn lề:</label>
+                                            <div style="display: flex; gap: 6px;">
+                                                <button id="alignBtn_left" class="btn" onclick="updateActiveElementAlign('left')" style="flex: 1; font-size: 10px; padding: 4px 6px; justify-content: center;">⬅ Trái</button>
+                                                <button id="alignBtn_center" class="btn" onclick="updateActiveElementAlign('center')" style="flex: 1; font-size: 10px; padding: 4px 6px; justify-content: center;">↔ Giữa</button>
+                                                <button id="alignBtn_right" class="btn" onclick="updateActiveElementAlign('right')" style="flex: 1; font-size: 10px; padding: 4px 6px; justify-content: center;">➡ Phải</button>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Color -->
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--text-2); display: block; margin-bottom: 4px;">Màu sắc:</label>
+                                            <select id="editorColorInput" onchange="updateActiveElementColor(this.value)" style="width: 100%; font-size: 11px; padding: 6px; background: var(--bg-1); color: var(--text-1); border: 1px solid var(--border); border-radius: 6px;">
+                                                <option value="text">Mặc định (Nội dung)</option>
+                                                <option value="title">Tiêu đề</option>
+                                                <option value="highlight">Nổi bật (Vàng)</option>
+                                                <option value="green">Xanh lá</option>
+                                                <option value="red">Đỏ</option>
+                                                <option value="yellow">Vàng</option>
+                                                <option value="white">Trắng</option>
+                                                <option value="cyan">Cyan</option>
+                                            </select>
+                                        </div>
+                                        
+                                        <!-- Reset layout coordinate -->
+                                        <button class="btn btn-danger" onclick="resetActiveElementLayout()" style="font-size: 10px; width: 100%; justify-content: center; padding: 6px; margin-top: 8px;">
+                                            ↩️ Đưa về dạng Flow mặc định
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- MODAL: Effects Gallery & Sandbox Simulator -->
+                    <div id="effectsModal" style="display:none; position:fixed; inset:0; z-index:10005; background:rgba(0,0,0,0.78); align-items:center; justify-content:center; backdrop-filter:blur(8px);" onclick="if(event.target===this)closeEffectsModal()">
+                        <div style="background:var(--bg-2); border:1px solid var(--border); border-radius:16px; width:min(1340px,98vw); height:92vh; display:flex; flex-direction:column; box-shadow:0 24px 64px rgba(0,0,0,0.6); overflow:hidden; animation:modalFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);">
+                            <div style="padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:var(--bg-3); flex-shrink:0;">
+                                <h3 style="margin:0; font-size:16px; font-weight:700; color:var(--accent); display:flex; align-items:center; gap:8px;">
+                                    <span>✨ Kho Hiệu Ứng & AI Generator</span>
+                                </h3>
+                                <button onclick="closeEffectsModal()" style="background:none; border:none; color:var(--text-2); font-size:24px; cursor:pointer; padding:0 4px; line-height:1;">&times;</button>
+                            </div>
+                            <div style="flex:1; overflow:hidden; padding:20px; display:flex; flex-direction:column;">
+                                <div class="effects-layout" style="height:100%;">
+                                    <!-- Left Column (360px) -->
+                                    <div class="effects-sidebar">
+                                        <!-- AI Section -->
+                                        <div class="effects-sec-card card">
+                                            <h3 class="sec-title">✨ AI Sáng Tạo Hiệu Ứng</h3>
+                                            <p class="sec-desc">Mô tả hiệu ứng để AI tự động viết mã Canvas JS</p>
+                                            <textarea id="aiEffectPrompt" placeholder="Ví dụ: Vòng tròn ma thuật xoay tròn phát sáng tím vàng, có các ký tự cổ bay lên..." rows="3" style="width:100%; box-sizing:border-box; margin-top:6px;"></textarea>
+                                            <button class="btn btn-primary" id="btnGenEffectAI" onclick="generateEffectWithAI()" style="width:100%; margin-top:8px;">
+                                                <span id="aiEffectSpinner" class="spinner-small" style="display:none; margin-right:4px;"></span>
+                                                🪄 Sinh Hiệu Ứng bằng AI
+                                            </button>
+                                        </div>
+
+                                        <!-- List Section -->
+                                        <div class="effects-list-card card">
+                                            <div class="list-filter-row">
+                                                <button id="filterSystemEffects" class="btn-filter active" onclick="setEffectsFilter('system')">Hệ thống</button>
+                                                <button id="filterCustomEffects" class="btn-filter" onclick="setEffectsFilter('custom')">Cá nhân</button>
+                                            </div>
+                                            <div class="effects-scroll-list" id="effectsList">
+                                                <!-- Rendered in JS -->
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Right Column (1fr) -->
+                                    <div class="effects-sandbox">
+                                        <div class="sandbox-phone-column">
+                                            <div class="phone-frame" style="width: 100%; max-height: calc(100vh - 250px);">
+                                                <canvas id="effectSandboxCanvas" width="1080" height="1920"></canvas>
+                                            </div>
+                                            <div class="preview-controls sandbox-controls" style="margin-top:8px;">
+                                                <button class="btn btn-icon" id="btnSandboxPlay" onclick="toggleSandboxPlay()" title="Play/Pause" style="font-size:14px; padding:6px; width:32px; height:32px;">⏸️</button>
+                                                <input type="range" id="sandboxSeekBar" min="0" max="100" value="50" class="seek-bar" oninput="onSandboxSeekBarInput(this.value)" style="flex:1;">
+                                                <span id="sandboxTimeDisplay" style="font-size:11px; color:var(--text-3); font-family:monospace; min-width:50px; text-align:right;">t: 50%</span>
+                                            </div>
+                                        </div>
+
+                                        <div class="sandbox-params-column">
+                                            <div class="card params-card">
+                                                <h3 class="sec-title">⚙️ Tham số Tùy biến</h3>
+                                                <p class="sec-desc" style="margin-bottom:12px;">Các tham số của hiệu ứng tự sinh từ schema</p>
+                                                <form id="effectParamsForm" oninput="updateSandboxParams()" style="display:flex; flex-direction:column; gap:10px;">
+                                                    <!-- Dynamic inputs go here -->
+                                                </form>
+                                                <div class="sandbox-sliders" style="margin-top:16px; border-top:1px solid var(--border); padding-top:14px; display:flex; flex-direction:column; gap:10px;">
+                                                    <div class="param-slider-group">
+                                                        <label>📈 stepProgress: <span id="valStepProgress">0.50</span></label>
+                                                        <input type="range" min="0" max="100" value="50" class="seek-bar" oninput="updateSandboxSlider('stepProgress', this.value)">
+                                                    </div>
+                                                    <div class="param-slider-group">
+                                                        <label>↕️ cursorY: <span id="valCursorY">400</span>px</label>
+                                                        <input type="range" min="0" max="1920" value="400" class="seek-bar" oninput="updateSandboxSlider('cursorY', this.value)">
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div class="card sandbox-actions-card">
+                                                <h3 class="sec-title">💾 Hành động</h3>
+                                                <div class="sandbox-actions-buttons">
+                                                    <button class="btn btn-primary" onclick="insertEffectToCurrentStep()" style="font-weight:700;">⚡ Chèn vào Step hiện tại</button>
+                                                    <button class="btn" id="btnSaveEffectToLibrary" onclick="saveActiveEffectToLibrary()">💾 Lưu vào Thư viện cá nhân</button>
+                                                    <button class="btn" onclick="copyEffectJson()">📋 Copy JSON</button>
+                                                    <button class="btn btn-danger" id="btnDeleteCustomEffect" onclick="deleteActiveCustomEffect()" style="display:none;">🗑️ Xóa khỏi Kho cá nhân</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB: Export -->
+                    <section class="tab-panel" id="panel-export">
+                        <div class="export-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap: 30px; max-width:1200px; margin:0 auto; align-items: start; width: 100%;">
+                            
+                            <!-- Cột 1: Cấu hình Render & Intro/Outro -->
+                            <div class="card" style="padding: 30px;">
+                                <h2 style="color:var(--accent); margin-bottom:20px; font-size:1.4rem; display:flex; align-items:center; gap:8px;">📤 Cấu hình & Render</h2>
+                                
+                                <div style="text-align:left; margin-bottom:24px;">
+                                    <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
+                                        <span class="text-muted">Render Mode:</span>
+                                        <select id="renderMode" class="select-input" style="width:200px; padding:6px 10px;">
+                                            <option value="pipe">⚡ Pipe (nhanh)</option>
+                                            <option value="frames">🖼️ Frames (ổn định)</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);">
+                                        <span class="text-muted">Encoder:</span>
+                                        <select id="gpuEncoder" class="select-input" style="width:200px; padding:6px 10px;">
+                                            <option value="cpu">🖥️ CPU (libx264)</option>
+                                            <option value="nvenc" selected>🟢 NVIDIA GPU (h264_nvenc)</option>
+                                            <option value="qsv">🔵 Intel QSV (h264_qsv)</option>
+                                            <option value="amf">🔴 AMD AMF (h264_amf)</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);">
+                                        <span class="text-muted">Aspect Ratio:</span>
+                                        <div style="display:flex;gap:8px;">
+                                            <label id="exportRatioBtn_9_16" onclick="setExportAspect('9:16')" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;cursor:pointer;border:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font-weight:700;font-size:13px;transition:all 0.2s;">
+                                                <span style="display:inline-block;width:14px;height:22px;border:2px solid currentColor;border-radius:2px;"></span> 9:16
+                                            </label>
+                                            <label id="exportRatioBtn_16_9" onclick="setExportAspect('16:9')" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;cursor:pointer;border:2px solid var(--border);background:var(--bg-3);color:var(--text-2);font-weight:600;font-size:13px;transition:all 0.2s;">
+                                                <span style="display:inline-block;width:22px;height:14px;border:2px solid currentColor;border-radius:2px;"></span> 16:9
+                                            </label>
+                                            <input type="hidden" id="exportAspectRatio" value="9:16">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div id="introOutroSaveStatus" style="display:none;"></div>
+                                
+                                <button class="btn btn-primary btn-xl" id="btnRender" onclick="renderVideo()" style="width:100%; margin-top:10px;">🎬 Render Video</button>
+                                <button class="btn btn-secondary btn-xl" id="btnRenderDual" onclick="renderDualVideo()" style="width:100%; margin-top:10px; background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%); color: white; border: none; font-weight: 700; box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4); display: flex; align-items: center; justify-content: center; gap: 8px;">🎭 Render Dual (Cả 2 Bản)</button>
+                                
+                                <div id="renderStatus" class="status-bar hidden" style="margin-top:20px;text-align:left;">
+                                    <div class="spinner"></div>
+                                    <span id="renderMsg">Rendering...</span>
+                                    <div class="progress-bar"><div class="progress-fill" id="renderProgress"></div></div>
+                                </div>
+                            </div>
+                            
+                            <!-- Cột 2: Trình phát video trực quan (HTML5 Player) -->
+                            <div class="card" style="padding: 30px; display:flex; flex-direction:column; align-items:center; min-height: 520px; justify-content: flex-start; position:relative; width: 100%;">
+                                <h2 style="color:var(--accent); margin-bottom:20px; font-size:1.4rem; align-self:flex-start; width:100%; display:flex; align-items:center; gap:8px;">📺 Trình phát Video</h2>
+                                
+                                <!-- Toggle Pills for Aspect Ratio Versions -->
+                                <div id="playerVersionSelector" style="display:flex; gap:10px; margin-bottom:20px; background:var(--bg-1); padding:4px; border-radius:10px; border:1px solid var(--border);">
+                                    <button id="pill_9_16" class="btn" onclick="switchPlayerVersion('9:16')" style="padding:6px 12px; font-size:12px; font-weight:700; border-radius:8px; border:none; background:transparent;">
+                                        📱 Dọc (9:16)
+                                    </button>
+                                    <button id="pill_16_9" class="btn" onclick="switchPlayerVersion('16:9')" style="padding:6px 12px; font-size:12px; font-weight:700; border-radius:8px; border:none; background:transparent;">
+                                        💻 Ngang (16:9)
+                                    </button>
+                                </div>
+                                
+                                <!-- Video Player Container with Custom responsive aspect ratios -->
+                                <div id="videoPlayerContainer" class="video-player-frame" style="width:100%; flex:1; display:flex; align-items:center; justify-content:center; background:#000; border-radius:12px; border:1px solid var(--border); overflow:hidden; position:relative; min-height: 320px; transition: all 0.3s ease;">
+                                    <video id="html5VideoPlayer" controls style="width:100%; height:100%; display:none; object-fit: contain;"></video>
+                                    
+                                    <!-- Placeholder when video not rendered -->
+                                    <div id="videoPlayerPlaceholder" style="text-align:center; padding:20px; color:var(--text-3); display:flex; flex-direction:column; align-items:center; gap:12px;">
+                                        <span style="font-size:48px;">🎬</span>
+                                        <span id="playerPlaceholderText" style="font-size:13px; max-width: 250px; line-height: 1.5;">Chưa có video. Hãy render ở cột bên để có thể phát trực tiếp!</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Dual Download Action Buttons -->
+                                <div id="dualDownloadArea" style="width:100%; display:flex; flex-direction:column; gap:10px; margin-top:20px;">
+                                    <div style="display:flex; gap:10px; width: 100%;">
+                                        <a id="btnDownload_9_16" class="btn btn-success" href="#" target="_blank" style="flex:1; justify-content:center; display:none;">
+                                            ⬇️ Tải bản Dọc (9:16)
+                                        </a>
+                                        <a id="btnDownload_16_9" class="btn btn-success" href="#" target="_blank" style="flex:1; justify-content:center; display:none;">
+                                            ⬇️ Tải bản Ngang (16:9)
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                        </div>
+                    </section>
+
+                    <!-- TAB: Publish (Public) -->
+                    <section class="tab-panel" id="panel-publish">
+                        <!-- Empty State when video not rendered -->
+                        <div id="publishEmptyState" class="card" style="text-align:center; padding:50px 30px; max-width:600px; margin:50px auto; border:1px dashed var(--border-color); background:var(--bg-secondary);">
+                            <span style="font-size:64px; display:inline-block; margin-bottom:20px; animation: float 3s ease-in-out infinite;">📤</span>
+                            <h3 style="color:var(--text-color); font-size:1.5rem; margin-bottom:12px; font-weight:600;">🎬 Chưa tìm thấy Video xuất bản</h3>
+                            <p style="color:var(--text-secondary); font-size:14px; line-height:1.6; margin-bottom:24px;">
+                                Bài giảng này chưa được render hoặc tệp video xuất bản chưa sẵn sàng.<br>
+                                Vui lòng chuyển qua tab <strong>Export</strong>, nhấp <strong>Render Video</strong> để hoàn tất xuất bản.
+                            </p>
+                            <button class="btn btn-primary" onclick="switchTab('export')" style="margin: 0 auto; display: inline-flex; align-items: center; gap: 8px;">
+                                <span>Chuyển sang tab Export</span> ➔
+                            </button>
+                        </div>
+
+                        <!-- Content State when video is ready -->
+                        <div id="publishContentWrapper" class="export-grid" style="display:none; grid-template-columns: 1fr 1.2fr; gap: 30px; max-width:1200px; margin:0 auto; align-items: start; width: 100%;">
+                            
+                            <!-- Cột 1: Thông tin & Trình phát Video của bài học -->
+                            <div class="card" style="padding: 30px; display:flex; flex-direction:column; align-items:center; min-height: 480px; justify-content: flex-start; position:relative; width: 100%;">
+                                <h2 style="color:var(--accent); margin-bottom:20px; font-size:1.4rem; align-self:flex-start; width:100%; display:flex; align-items:center; gap:8px;">📺 Trình phát Video</h2>
+                                
+                                <!-- Toggle Pills for Aspect Ratio Versions in Publish Tab -->
+                                <div id="publishPlayerVersionSelector" style="display:flex; gap:10px; margin-bottom:20px; background:var(--bg-1); padding:4px; border-radius:10px; border:1px solid var(--border);">
+                                    <button id="pub_pill_9_16" class="btn" onclick="switchPublishPlayerVersion('9:16')" style="padding:6px 12px; font-size:12px; font-weight:700; border-radius:8px; border:none; background:transparent;">
+                                        📱 Dọc (9:16)
+                                    </button>
+                                    <button id="pub_pill_16_9" class="btn" onclick="switchPublishPlayerVersion('16:9')" style="padding:6px 12px; font-size:12px; font-weight:700; border-radius:8px; border:none; background:transparent;">
+                                        💻 Ngang (16:9)
+                                    </button>
+                                </div>
+                                
+                                <!-- Video Player Container with Custom responsive aspect ratios in Publish Tab -->
+                                <div id="publishVideoPlayerContainer" class="video-player-frame" style="width:100%; flex:1; display:flex; align-items:center; justify-content:center; background:#000; border-radius:12px; border:1px solid var(--border); overflow:hidden; position:relative; min-height: 300px; transition: all 0.3s ease;">
+                                    <video id="publishHtml5VideoPlayer" controls style="width:100%; height:100%; object-fit: contain;"></video>
+                                </div>
+
+                                <div style="width:100%; background:var(--bg-1); padding:16px; border-radius:10px; border:1px solid var(--border); margin-top:20px; text-align: left;">
+                                    <h4 style="font-weight:600; font-size:13px; color:var(--text-0); margin-bottom:8px;">📊 Thông tin bài giảng</h4>
+                                    <div style="font-size:12px; color:var(--text-2); display:flex; flex-direction:column; gap:6px;">
+                                        <div><strong>Tiêu đề:</strong> <span id="pubLessonTitle">...</span></div>
+                                        <div><strong>Chủ đề:</strong> <span id="pubLessonSubject">...</span></div>
+                                        <div><strong>Số bước:</strong> <span id="pubLessonSteps">...</span></div>
+                                        <div><strong>Giọng đọc:</strong> <span id="pubLessonVoice">...</span></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- ===== Social Publishing & AI SEO Panel ===== -->
+                            <div class="card" id="socialPublishPanel" style="padding: 24px; text-align: left; width: 100%;">
+                                <h2 style="color:var(--accent); font-size:1.3rem; margin-bottom:15px; display:flex; align-items:center; gap:8px; font-weight:700;">🚀 Phân Phối Mạng Xã Hội</h2>
+                                
+                                <!-- AI SEO Generator Card -->
+                                <div style="background:var(--bg-1); padding:16px; border-radius:10px; margin-bottom:15px; border:1px solid var(--border);">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                        <span style="font-weight:600; font-size:13px; color:var(--text-0);">📝 Tối Ưu Hóa SEO (AI)</span>
+                                        <input type="hidden" id="publishSEOPlatform" value="youtube">
+                                    </div>
+                                    <div style="display:flex; flex-direction:column; gap:8px;">
+                                        <input id="publishSEOTitle" class="text-input" placeholder="Tiêu đề chuẩn SEO..." style="width:100%; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px;">
+                                        <textarea id="publishSEODesc" class="text-input" rows="3" placeholder="Mô tả chuẩn SEO..." style="width:100%; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px; resize:vertical;"></textarea>
+                                        <input id="publishSEOTags" class="text-input" placeholder="Hashtags, tags..." style="width:100%; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                                            <button class="btn btn-sm btn-secondary" onclick="generatePublishSEO()" id="btnGenSEO" style="padding:4px 10px; font-size:11px;">✨ Sinh SEO bằng AI</button>
+                                            <button class="btn btn-sm btn-primary" onclick="savePublishSEO()" style="padding:4px 12px; font-size:11px;">💾 Lưu SEO</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="background:var(--bg-1); padding:16px; border-radius:10px; margin-bottom:15px; border:1px solid var(--border);">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                        <div style="font-weight:600; font-size:13px; color:var(--text-0); display:flex; align-items:center; gap:6px;">
+                                            🔌 Thêm Kênh Đăng (Post Target)
+                                        </div>
+                                        <button class="btn btn-sm btn-secondary" onclick="openDirectAuthModal()" style="padding:4px 10px; font-size:11px; display:flex; align-items:center; gap:4px; background:rgba(99, 102, 241, 0.1); border:1px solid rgba(99, 102, 241, 0.3); color:#818cf8;">
+                                            🔐 Liên kết Kênh mới (Auth New)
+                                        </button>
+                                    </div>
+                                    <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                                        <select id="authPlatformSelect" class="select-input" style="flex:1; max-width:110px; min-width:80px; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px; text-overflow:ellipsis; overflow:hidden;" onchange="loadAuthAccounts(this.value)">
+                                            <option value="youtube">📺 YouTube</option>
+                                            <option value="facebook">📘 Facebook</option>
+                                            <option value="tiktok">🎵 TikTok</option>
+                                        </select>
+                                        <select id="authAccountSelect" class="select-input" style="flex:1.5; max-width:240px; min-width:120px; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px; text-overflow:ellipsis; overflow:hidden;" onchange="validateAndLoadChannels()">
+                                            <option value="">⏳ Đang tải tài khoản...</option>
+                                        </select>
+                                        <select id="authChannelSelect" class="select-input" style="flex:2; max-width:280px; min-width:150px; padding:6px 10px; font-size:12px; background:var(--bg-2); border:1px solid var(--border); color:var(--text-1); border-radius:6px; text-overflow:ellipsis; overflow:hidden;">
+                                            <option value="">— Chọn tài khoản trước —</option>
+                                        </select>
+                                        <button class="btn btn-sm btn-primary" onclick="addSelectedAuthChannel()" style="flex-shrink:0; padding:6px 12px; font-size:12px; font-weight:600; white-space:nowrap;">➕ Thêm</button>
+                                    </div>
+                                    <div id="authLoadStatus" style="margin-top:8px; font-size:11px; color:var(--text-3); display:flex; align-items:center; gap:6px; min-height:16px;"></div>
+                                    <div style="margin-top:8px; font-size:10px; color:var(--text-3); line-height:1.5;">
+                                        * <strong>Thêm Kênh Đăng:</strong> Chọn kênh trong danh sách tài khoản đã có và bấm <strong>➕ Thêm</strong> để đăng video lên kênh đó.
+                                        <br>
+                                        * <strong>Liên kết Kênh mới:</strong> Bấm <strong>🔐 Liên kết Kênh mới</strong> để cấp quyền OAuth (YouTube/FB/TikTok) cho tài khoản mới mà không cần rời trang.
+                                    </div>
+                                </div>
+                                
+                                <!-- Platform Target Grid -->
+                                <div id="publishPlatformGrid" style="display:flex; flex-direction:column; gap:10px; margin-bottom:15px;"></div>
+                                
+                                <button class="btn btn-success" id="btnPublishAll" onclick="publishAllTargets()" style="width:100%; font-weight:700;">🚀 Đăng Video Tất Cả Nền Tảng</button>
+                            </div>
+ 
+                        </div>
+                    </section>
+                    
+                    <!-- Direct Auth Modal -->
+                    <div id="directAuthModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;">
+                        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;width:520px;max-width:95vw;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.6);">
+                            <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg-1);">
+                                <h2 style="margin:0;font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;">🔓 Liên kết Tài khoản mới (OAuth Link)</h2>
+                                <button onclick="closeDirectAuthModal()" style="background:none;border:none;color:var(--text-3);font-size:18px;cursor:pointer;transition:color 0.2s;" onmouseover="this.style.color='var(--text-1)'" onmouseout="this.style.color='var(--text-3)'">✕</button>
+                            </div>
+                            
+                            <div style="padding:20px; overflow-y:auto; max-height:80vh;">
+                                <!-- Step 1: Selection & Authorization Config -->
+                                <div id="directAuthStepConfig">
+                                    <div class="form-group" style="margin-bottom:16px;">
+                                        <label style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-2);">1. Nền tảng (Platform)</label>
+                                        <select id="directAuthPlatform" class="select-input" style="width:100%; padding:8px 12px; background:var(--bg-1); border:1px solid var(--border); color:var(--text-1); border-radius:6px; box-sizing:border-box;" onchange="onDirectAuthPlatformChange(this.value)">
+                                            <option value="youtube">📺 YouTube</option>
+                                            <option value="facebook">📘 Facebook</option>
+                                            <option value="tiktok">🎵 TikTok</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div class="form-group" style="margin-bottom:16px;">
+                                        <label style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-2);">2. Chọn Credential (Ứng dụng kết nối)</label>
+                                        <select id="directAuthCredSelect" class="select-input" style="width:100%; padding:8px 12px; background:var(--bg-1); border:1px solid var(--border); color:var(--text-1); border-radius:6px; box-sizing:border-box;" onchange="onDirectAuthCredChange(this.value)">
+                                            <!-- Dynamically populated -->
+                                        </select>
+                                        <small style="color:var(--text-3); font-size:11px; margin-top:4px; display:block;">
+                                            * Cấu hình ứng dụng OAuth Client ID tương ứng trong Auth Manager.
+                                        </small>
+                                    </div>
+                                    
+                                    <!-- Scopes Aggregation Info -->
+                                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:12px; border-radius:8px; margin-bottom:16px;">
+                                        <div style="font-weight:600; font-size:11px; color:var(--text-2); margin-bottom:6px; display:flex; justify-content:space-between;">
+                                            <span>📦 OAuth Scopes được yêu cầu</span>
+                                            <span id="directAuthScopesCount" style="color:var(--accent);">0 scopes</span>
+                                        </div>
+                                        <div id="directAuthScopesList" style="display:flex; flex-wrap:wrap; gap:6px; max-height:80px; overflow-y:auto; padding:4px 0;">
+                                            <!-- chips -->
+                                        </div>
+                                        <div style="margin-top:8px; font-size:10px; color:var(--text-3); line-height:1.4;">
+                                            <strong>Redirect URI:</strong> <code id="directAuthRedirectUri" style="font-size:10px; background:rgba(0,0,0,0.3); padding:2px 4px; border-radius:4px; user-select:all; word-break:break-all;"></code>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-group" style="margin-bottom:20px;">
+                                        <label style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-2);">3. Tự động mở trình duyệt (Tùy chọn)</label>
+                                        <select id="directAuthBrowserProfile" class="select-input" style="width:100%; padding:8px 12px; background:var(--bg-1); border:1px solid var(--border); color:var(--text-1); border-radius:6px; box-sizing:border-box;">
+                                            <option value="">🌐 Default Browser (Trình duyệt hệ thống)</option>
+                                        </select>
+                                        <small style="color:var(--text-3); font-size:11px; margin-top:4px; display:block;">
+                                            Chọn profile trình duyệt tự động để Playwright tự xử lý đăng nhập, hoặc để trống để tự copy/mở link.
+                                        </small>
+                                    </div>
+                                    
+                                    <div style="display:flex; justify-content:flex-end; gap:10px; border-top:1px solid var(--border); padding-top:15px;">
+                                        <button class="btn btn-secondary" onclick="closeDirectAuthModal()">Hủy</button>
+                                        <button class="btn btn-secondary" onclick="startDirectAuth('copy')" style="background:#1e293b; color:#cbd5e1; border:none;">📋 Copy Link</button>
+                                        <button class="btn btn-primary" onclick="startDirectAuth('open')">🚀 Bắt đầu liên kết</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Step 2: Waiting Polling State -->
+                                <div id="directAuthStepWaiting" style="display:none; text-align:center; padding:20px 0;">
+                                    <div style="position:relative; width:64px; height:64px; margin:0 auto 16px auto; display:flex; align-items:center; justify-content:center;">
+                                        <span style="font-size:32px;">⏳</span>
+                                    </div>
+                                    <h3 style="margin:0 0 8px 0; font-size:15px; color:var(--text-0);">Đang chờ xác thực trên trình duyệt...</h3>
+                                    <p id="directAuthWaitingMsg" style="font-size:12px; color:var(--text-2); line-height:1.6; margin:0 0 20px 0; padding:0 10px;">
+                                        Vui lòng hoàn thành quá trình đăng nhập và nhấn cho phép (Authorize) trên trình duyệt vừa mở. Cửa sổ này sẽ tự động đóng và đồng bộ khi hoàn tất.
+                                    </p>
+                                    
+                                    <div style="background:rgba(245,158,11,0.05); border:1px solid rgba(245,158,11,0.2); border-radius:8px; padding:12px; text-align:left; font-size:11px; color:#f59e0b; margin-bottom:20px; line-height:1.5;">
+                                        💡 <strong>Mẹo nhỏ:</strong> Nếu trình duyệt không tự mở, hãy click <strong>📋 Copy lại Link</strong> rồi dán vào trình duyệt của bạn để thực hiện.
+                                    </div>
+                                    
+                                    <div style="display:flex; justify-content:center; gap:10px; border-top:1px solid var(--border); padding-top:15px;">
+                                        <button class="btn btn-secondary" onclick="cancelDirectAuthPolling()">Hủy / Bỏ qua</button>
+                                        <button id="btnDirectAuthCopyAgain" class="btn btn-secondary" style="background:#1e293b; color:#cbd5e1; border:none;" onclick="copyDirectAuthUrlAgain()">📋 Copy lại Link</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Skills Manager Modal -->
+                    <div id="skillsManagerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9998;align-items:center;justify-content:center;">
+                        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;width:860px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;">
+                            <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                                <h2 style="margin:0;font-size:18px;">⚙️ Script Skills Manager</h2>
+                                <button onclick="closeSkillsManager()" style="background:none;border:none;color:var(--text-1);font-size:18px;cursor:pointer;">✕</button>
+                            </div>
+                            <div style="padding:20px;flex:1;overflow:auto;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                                    <div>
+                                        <p style="margin:0;font-size:13px;color:var(--text-3);">Mỗi Skill định nghĩa phong cách & quy tắc AI tạo kịch bản. Chọn 1 skill cho Project hiện tại.</p>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="openCreateSkillDialog()" style="display:flex;align-items:center;gap:6px;">➕ Tạo Skill mới</button>
+                                </div>
+
+                                <!-- Active skill indicator -->
+                                <div id="activeSkillInfo" style="background:var(--bg-3);border:1px solid var(--accent);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:none;">
+                                    <span style="font-size:12px;color:var(--text-3);">Skill đang dùng cho project này:</span>
+                                    <span id="activeSkillLabel" style="margin-left:8px;font-weight:700;color:var(--accent);"></span>
+                                    <span id="activeSkillDesc" style="margin-left:8px;font-size:12px;color:var(--text-2);"></span>
+                                </div>
+
+                                <!-- Skills list -->
+                                <div id="skillsList" style="display:flex;flex-direction:column;gap:10px;">
+                                    <div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px;">Đang tải Skills...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Skill Editor Modal (inline within manager or next to it) -->
+                        <div id="skillEditorModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;align-items:center;justify-content:center;">
+                            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;width:720px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;">
+                                <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                                    <h3 style="margin:0;font-size:16px;" id="skillEditorTitle">✏️ Chỉnh sửa Skill</h3>
+                                    <button onclick="closeSkillEditor()" style="background:none;border:none;color:var(--text-1);font-size:18px;cursor:pointer;">✕</button>
+                                </div>
+                                <div style="padding:16px 20px;flex:1;overflow:auto;">
+                                    <p style="font-size:12px;color:var(--text-3);margin:0 0 10px;">Chỉnh sửa raw JSON. Các trường quan trọng: <code>display_name</code>, <code>prompt_injection</code>, <code>canvas_rules</code>, <code>voice_rules</code>.</p>
+                                    <textarea id="skillEditorJson" rows="22" style="width:100%;box-sizing:border-box;padding:12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;color:#7dd3fc;font-size:12px;resize:vertical;font-family:'Courier New',Consolas,monospace;line-height:1.5;"></textarea>
+                                    <span id="skillEditorError" style="font-size:11px;color:#ef4444;margin-top:4px;display:none;"></span>
+                                </div>
+                                <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;">
+                                    <button class="btn" id="btnDeleteSkill" onclick="deleteCurrentSkill()" style="color:#ef4444;border-color:#ef4444;">🗑️ Xóa Skill</button>
+                                    <div style="display:flex;gap:8px;">
+                                        <button class="btn" onclick="closeSkillEditor()">Hủy</button>
+                                        <button class="btn btn-primary" onclick="saveCurrentSkill()">💾 Lưu Skill</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </main>
+
+            <!-- Right Sidebar (Gallery) -->
+            <aside class="gallery-sidebar" id="galleryPanel">
+                <div class="gallery-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h3>🖼️ Thư viện nguyên liệu</h3>
+                        <p>Icon, hình khối, trang trí</p>
+                    </div>
+                    <button class="btn-icon" onclick="showAddCategoryModal()" title="Thêm danh mục">➕</button>
+                </div>
+                
+                <div style="padding: 10px;">
+                    <select id="galleryCategorySelect" class="select-input" onchange="loadGalleryItems()" style="width:100%;">
+                        <option value="">Tất cả danh mục</option>
+                    </select>
+                </div>
+
+                <div class="gallery-content" id="galleryContent">
+                    <div class="empty-state" style="grid-column: span 2; padding:40px 10px;">
+                        <span style="font-size:32px;opacity:0.3;">🖼️</span>
+                        <p class="text-muted" style="margin-top:10px;font-size:11px;">Chưa có tài nguyên nào.</p>
+                    </div>
+                </div>
+                <div class="gallery-footer">
+                    <input type="file" id="galleryFileInput" hidden accept="image/*, .svg">
+                    <button class="btn btn-primary" onclick="document.getElementById('galleryFileInput').click()" style="width:100%; justify-content:center;">⬆️ Upload Asset</button>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <!-- Gallery Category Modal -->
+    <div id="categoryModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2>➕ Thêm danh mục mới</h2>
+                <button class="close-btn" onclick="closeModal('categoryModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Tên danh mục</label>
+                    <input type="text" id="catName" class="input" placeholder="VD: Icons">
+                </div>
+                <div class="form-group">
+                    <label>Icon hiển thị (Emoji)</label>
+                    <input type="text" id="catIcon" class="input" placeholder="VD: 🌟" value="📁">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('categoryModal')">Hủy</button>
+                <button class="btn btn-primary" onclick="submitCreateCategory()">Tạo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!--  NEW PROJECT WIZARD MODAL (3 Steps)                    -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="projectModal" class="modal hidden">
+        <div class="modal-content wizard-modal">
+            <!-- Step Indicator -->
+            <div class="wizard-steps">
+                <div class="wizard-step-item active" id="wStep1"><span class="wstep-num">1</span> Nhập liệu</div>
+                <div class="wizard-divider">›</div>
+                <div class="wizard-step-item" id="wStep2"><span class="wstep-num">2</span> AI Phân tích</div>
+                <div class="wizard-divider">›</div>
+                <div class="wizard-step-item" id="wStep3"><span class="wstep-num">3</span> Xác nhận</div>
+                <button class="close-btn" onclick="closeModal('projectModal')" style="margin-left:auto">✕</button>
+            </div>
+
+            <!-- ── STEP 1: Input ──────────────────────────────── -->
+            <div id="wizardStep1" class="wizard-pane active">
+                <div class="modal-body" style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+
+                    <!-- Project title -->
+                    <div>
+                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px;">📌 Tên project</label>
+                        <input type="text" id="projTitle" class="input" placeholder="VD: Toán lớp 4 - Đặt tính cộng trừ" style="width:100%;box-sizing:border-box;">
+                    </div>
+
+                    <!-- Phương thức tạo -->
+                    <div>
+                        <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">🚀 Phương thức tạo</label>
+                        <div style="display:flex;gap:8px;">
+                            <label id="pmCardAI" onclick="selectProjectMethod('ai')" style="flex:1;border:2px solid var(--accent);border-radius:8px;padding:10px 8px;text-align:center;cursor:pointer;background:var(--bg-2);transition:all 0.2s;box-shadow:var(--shadow-sm);">
+                                <input type="radio" name="projectMethod" value="ai" checked hidden>
+                                <div style="font-size:1.4rem">🤖</div>
+                                <div style="font-size:12px;font-weight:700;margin-top:4px;color:var(--accent);">AI Autopilot (Tự động)</div>
+                                <div style="font-size:10px;color:var(--text-2);margin-top:2px;line-height:1.3;">AI tự nhận diện nội dung và viết kịch bản</div>
+                            </label>
+                            <label id="pmCardManual" onclick="selectProjectMethod('manual')" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:10px 8px;text-align:center;cursor:pointer;background:var(--bg-2);transition:all 0.2s;box-shadow:var(--shadow-sm);">
+                                <input type="radio" name="projectMethod" value="manual" hidden>
+                                <div style="font-size:1.4rem">✍️</div>
+                                <div style="font-size:12px;font-weight:700;margin-top:4px;color:var(--text-0);">Tạo Thủ Công</div>
+                                <div style="font-size:10px;color:var(--text-2);margin-top:2px;line-height:1.3;">Khởi tạo project trống, tự viết/dán kịch bản sau</div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Language & Aspect Ratio -->
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <div style="flex:1;display:flex;align-items:center;gap:10px;min-width:180px;">
+                            <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">🌐 Ngôn ngữ</label>
+                            <select id="langSelect" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:6px 10px;font-size:13px;">
+                                <option value="vi">🇻🇳 Tiếng Việt</option>
+                                <option value="en">🇺🇸 English</option>
+                                <option value="zh">🇨🇳 中文 (Tiếng Trung)</option>
+                                <option value="ja">🇯🇵 日本語 (Tiếng Nhật)</option>
+                                <option value="ko">🇰🇷 한국어 (Tiếng Hàn)</option>
+                                <option value="fr">🇫🇷 Français (Tiếng Pháp)</option>
+                                <option value="de">🇩🇪 Deutsch (Tiếng Đức)</option>
+                                <option value="es">🇪🇸 Español (Tiếng Tây Ban Nha)</option>
+                                <option value="pt">🇧🇷 Português (Tiếng Bồ Đào Nha)</option>
+                                <option value="ar">🇸🇦 العربية (Tiếng Ả Rập)</option>
+                                <option value="th">🇹🇭 ภาษาไทย (Tiếng Thái)</option>
+                                <option value="id">🇮🇩 Bahasa Indonesia</option>
+                            </select>
+                        </div>
+                        <div style="flex:1;display:flex;align-items:center;gap:10px;min-width:180px;">
+                            <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">📐 Tỉ lệ Video</label>
+                            <select id="wizardAspectRatio" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:6px 10px;font-size:13px;font-weight:600;">
+                                <option value="16:9">16:9 (Ngang)</option>
+                                <option value="9:16" selected>9:16 (Dọc)</option>
+                                <option value="1:1">1:1 (Vuông)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- AI config section (hidden when manual is chosen) -->
+                    <div id="wizardAIFields" style="display:flex; flex-direction:column; gap:12px;">
+                        <!-- Input tabs: Ảnh/PDF | Text -->
+                        <div>
+                            <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">📥 Nội dung project</label>
+                            <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:8px;">
+                                <button id="inputTabImg" onclick="switchInputTab('img')" style="flex:1;padding:7px 10px;background:var(--accent);color:#000;border:none;font-size:12px;font-weight:600;cursor:pointer;">📸 Ảnh / PDF</button>
+                                <button id="inputTabText" onclick="switchInputTab('text')" style="flex:1;padding:7px 10px;background:var(--bg-3);color:var(--text-2);border:none;border-left:1px solid var(--border);font-size:12px;font-weight:600;cursor:pointer;">✏️ Nhập text</button>
+                            </div>
+
+                            <!-- Image upload pane -->
+                            <div id="inputPaneImg">
+                                <div id="wizardDropZone" class="wizard-drop-zone" style="padding:16px 10px;min-height:80px;" onclick="document.getElementById('wizardImageInput').click()">
+                                    <div id="wizardDropContent">
+                                        <div style="font-size:1.6rem;margin-bottom:4px">📸</div>
+                                        <div style="font-weight:600;font-size:13px">Kéo thả ảnh / PDF vào đây</div>
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px">hoặc click để chọn file</div>
+                                    </div>
+                                    <input type="file" id="wizardImageInput" accept="image/*,application/pdf" hidden>
+                                </div>
+                            </div>
+
+                            <!-- Text input pane (hidden by default) -->
+                            <div id="inputPaneText" style="display:none;">
+                                <textarea id="wizardTextInput" class="input" rows="4" placeholder="Nhập nội dung project bằng text..." style="width:100%;box-sizing:border-box;resize:vertical;"></textarea>
+                            </div>
+                        </div>
+
+                        <!-- Two option rows: Video mode + Illustration (compact inline) -->
+                        <div style="display:flex;gap:10px;">
+                            <!-- Video mode -->
+                            <div style="flex:1;">
+                                <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">🎬 Chế độ</label>
+                                <div style="display:flex;gap:6px;">
+                                    <label id="vmCardMulti" onclick="selectVideoMode('multi')" style="flex:1;border:1px solid var(--accent);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
+                                        <input type="radio" name="videoMode" value="multi" checked hidden>
+                                        <div style="font-size:1.2rem">📚</div>
+                                        <div style="font-size:11px;font-weight:600;margin-top:2px">N video</div>
+                                    </label>
+                                    <label id="vmCardSingle" onclick="selectVideoMode('single')" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
+                                        <input type="radio" name="videoMode" value="single" hidden>
+                                        <div style="font-size:1.2rem">🎬</div>
+                                        <div style="font-size:11px;font-weight:600;margin-top:2px">1 video</div>
+                                    </label>
+                                </div>
+                            </div>
+                            <!-- Illustration mode -->
+                            <div style="flex:1;">
+                                <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">🖼️ Hình minh họa</label>
+                                <div style="display:flex;gap:6px;">
+                                    <label id="illCardCanvas" onclick="selectIllustrationMode('canvas')" style="flex:1;border:1px solid var(--accent);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
+                                        <input type="radio" name="illustrationMode" value="canvas" checked hidden>
+                                        <div style="font-size:1.2rem">📐</div>
+                                        <div style="font-size:11px;font-weight:600;margin-top:2px">Javascript</div>
+                                    </label>
+                                    <label id="illCardChatgpt" onclick="selectIllustrationMode('chatgpt')" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 6px;text-align:center;cursor:pointer;background:var(--bg-2);">
+                                        <input type="radio" name="illustrationMode" value="chatgpt" hidden>
+                                        <div style="font-size:1.2rem">🤖</div>
+                                        <div style="font-size:11px;font-weight:600;margin-top:2px">AI Image</div>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Clear all steps + Audience -->
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text-2);">
+                                <input type="checkbox" id="wizardClearAll" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
+                                🆕 Mỗi step = 1 trang <span style="font-size:11px;color:var(--text-3);">(clear all)</span>
+                            </label>
+                            <select id="wizardAudience" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:4px 8px;font-size:12px;" title="Đối tượng">
+                                <option value="children">👦 Trẻ em (6-12)</option>
+                                <option value="teen">🧑 Thanh niên (13-18)</option>
+                                <option value="adult">👨 Người lớn (18-50)</option>
+                                <option value="senior">👴 Cao tuổi (50+)</option>
+                            </select>
+                        </div>
+
+                        <!-- Intro & Outro templates -->
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-3);border-radius:8px;padding:8px;border:1px solid var(--border);margin-top:6px;">
+                            <div style="flex:1;display:flex;align-items:center;gap:6px;min-width:180px;">
+                                <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;margin:0;">🎬 Mẫu Intro</label>
+                                <select id="introTemplateSelect" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:5px 8px;font-size:12px;outline:none;">
+                                    <option value="none">⏳ Đang tải...</option>
+                                </select>
+                                <button class="btn-icon" onclick="openAddTemplateModal('intro')" title="Thêm Mẫu Intro" style="font-size:11px;width:24px;height:24px;border-radius:6px;background:var(--bg-2);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">➕</button>
+                            </div>
+                            <div style="flex:1;display:flex;align-items:center;gap:6px;min-width:180px;">
+                                <label style="font-size:11px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;margin:0;">🎬 Mẫu Outro</label>
+                                <select id="outroTemplateSelect" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:5px 8px;font-size:12px;outline:none;">
+                                    <option value="none">⏳ Đang tải...</option>
+                                </select>
+                                <button class="btn-icon" onclick="openAddTemplateModal('outro')" title="Thêm Mẫu Outro" style="font-size:11px;width:24px;height:24px;border-radius:6px;background:var(--bg-2);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">➕</button>
+                            </div>
+                        </div>
+
+                        <!-- AI Engine + Profile (shows for all modes) -->
+                        <div id="chatgptProfileRow" style="display:flex;align-items:center;gap:8px;background:var(--bg-3);border-radius:6px;padding:8px 10px;flex-wrap:wrap;">
+                            <select id="wizardEngine" style="background:var(--bg-1);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:4px 8px;font-size:12px;font-weight:600;">
+                                <option value="chatgpt">🤖 ChatGPT</option>
+                                <option value="grok">🧠 Grok</option>
+                                <option value="veo3">🎨 Veo3</option>
+                            </select>
+                            <select id="wizardChatgptProfile" style="flex:1;background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:4px 8px;font-size:12px;">
+                                <option value="youtube6">⏳ Đang tải...</option>
+                            </select>
+                            <select id="wizardChatgptSize" style="background:var(--bg-1);border:1px solid var(--border);color:var(--text-1);border-radius:6px;padding:4px 8px;font-size:12px;margin-left:4px;" title="Tỉ lệ Hình minh họa">
+                                <option value="1:1">Ảnh 1:1</option>
+                                <option value="16:9">Ảnh 16:9</option>
+                                <option value="9:16">Ảnh 9:16</option>
+                            </select>
+                        </div>
+
+                        <!-- ⚡ Script Skill Selector Row -->
+                        <div style="display:flex;align-items:center;gap:8px;background:var(--bg-3);border-radius:6px;padding:8px 10px;margin-top:6px;border:1px solid var(--border);">
+                            <span style="font-size:12px;color:var(--text-3);white-space:nowrap;flex-shrink:0;">⚡ Script Skill:</span>
+                            <select id="wizardSkillSelect"
+                                style="flex:1;background:var(--bg-1);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:4px 8px;font-size:12px;font-weight:600;">
+                                <option value="general">📋 Tổng quát (mặc định)</option>
+                            </select>
+                            <button class="btn-icon" onclick="openSkillsManager()" title="Quản lý Skills (Sửa/Thêm)" style="font-size:14px;padding:4px;width:26px;height:26px;border-radius:4px;background:var(--bg-2);border:1px solid var(--border);">⚙️</button>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="modal-footer" style="padding:10px 20px;">
+                    <button class="btn" onclick="closeModal('projectModal')">Hủy</button>
+                    <button class="btn btn-primary" id="btnWizardNext" onclick="handleWizardNext()" style="gap:6px;">🤖 AI Phân tích →</button>
+                </div>
+            </div>
+            <!-- ── STEP 2: AI Scan ────────────────────────────── -->
+            <div id="wizardStep2" class="wizard-pane hidden">
+                <div class="modal-body">
+                    <div id="wizardScanLoading" style="text-align:center;padding:40px 20px">
+                        <div class="spinner" style="margin:0 auto 16px;width:32px;height:32px"></div>
+                        <div style="font-weight:600;font-size:1rem">🤖 AI đang đọc và đếm số project...</div>
+                        <div class="text-muted" style="font-size:13px;margin-top:8px">Vision AI đang phân tích nội dung project</div>
+                    </div>
+                    <div id="wizardScanResult" class="hidden">
+                        <div class="wizard-scan-summary" id="wizardScanSummary"></div>
+                        <div style="margin:16px 0 8px;font-weight:600;font-size:0.9rem">📋 Danh sách project sẽ tạo:</div>
+                        <div id="wizardLessonList" class="wizard-lesson-list"></div>
+                        <div style="margin-top:12px;font-size:12px;color:var(--text-3)">
+                            💡 Bấm vào tên để sửa. Dùng ➕ để thêm project, ✕ để xoá.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="wizardGoBack()">← Quay lại</button>
+                    <button class="btn btn-primary" id="wizardConfirmBtn" onclick="wizardGoConfirm()" disabled>Xác nhận →</button>
+                </div>
+            </div>
+
+            <!-- ── STEP 3: Confirm & Run ──────────────────────── -->
+            <div id="wizardStep3" class="wizard-pane hidden">
+                <div class="modal-body">
+                    <div class="wizard-confirm-box">
+                        <div style="font-size:2.5rem;margin-bottom:12px">🚀</div>
+                        <h3 id="wizardConfirmTitle" style="color:var(--accent);margin-bottom:8px"></h3>
+                        <div id="wizardConfirmSummary" class="text-muted" style="font-size:14px;margin-bottom:16px"></div>
+                        <div id="wizardConfirmList" style="text-align:left;margin-bottom:16px"></div>
+                        <div style="margin-bottom:16px">
+                            <div style="font-weight:600;margin-bottom:8px">🎞️ Render Mode:</div>
+                            <div style="display:flex;gap:8px">
+                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRenderMode" value="pipe" checked>
+                                    <div><strong>⚡ Pipe</strong> <span class="text-muted" style="font-size:11px">(nhanh)</span></div>
+                                </label>
+                                <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg-3);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRenderMode" value="frames">
+                                    <div><strong>🖼️ Frames</strong> <span class="text-muted" style="font-size:11px">(ổn định)</span></div>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="wizard-run-mode">
+                            <div style="font-weight:600;margin-bottom:10px">⚙️ Chế độ chạy:</div>
+                            <div style="display:flex;flex-direction:column;gap:8px">
+                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:var(--bg-3);padding:12px;border-radius:8px;border:1px solid var(--border)">
+                                    <input type="radio" name="wizardRunMode" value="manual" style="margin-top:3px">
+                                    <div>
+                                        <strong>🖐️ Manual</strong>
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tạo project & lesson, tôi sẽ tự chạy từng bài</div>
+                                    </div>
+                                </label>
+                                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;background:rgba(255,215,0,0.05);padding:12px;border-radius:8px;border:1px solid rgba(255,215,0,0.3)">
+                                    <input type="radio" name="wizardRunMode" value="autopilot" checked style="margin-top:3px">
+                                    <div>
+                                        <strong style="color:var(--accent)">🤖 Full Autopilot</strong>
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px">Tự động chạy theo tab: Raw Content → Script → Render cho TẤT CẢ bài</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="wizardGoScanStep()">← Quay lại</button>
+                    <button class="btn btn-primary" id="wizardRunBtn" onclick="wizardRun()" style="background:linear-gradient(135deg,#FFD700,#FDB931);color:#000">▶️ Tạo và Chạy Tự động</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+
+    <!-- Add Template Modal -->
+    <div id="addTemplateModal" class="modal hidden">
+        <div class="modal-content" style="width: 550px; background: var(--bg-glass); backdrop-filter: blur(12px);">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border);">
+                <h2 id="addTemplateModalTitle" style="color:var(--accent); font-size:1.2rem; display:flex; align-items:center; gap:8px;">➕ Thêm Mẫu Mới</h2>
+                <button class="close-btn" onclick="closeAddTemplateModal()">✕</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <!-- Tab Headers -->
+                <div class="list-filter-row" style="margin-bottom: 20px; display: flex; background: var(--bg-1); border-radius: 8px; border: 1px solid var(--border); padding: 2px;">
+                    <button class="btn-filter active" id="btnTabVideo" onclick="switchTemplateTab('video')" style="flex: 1; border: none; padding: 8px; font-weight: 600; font-size:12px; cursor: pointer; border-radius: 6px; transition: all 0.2s;">📹 Video MP4</button>
+                    <button class="btn-filter" id="btnTabScript" onclick="switchTemplateTab('script')" style="flex: 1; border: none; padding: 8px; font-weight: 600; font-size:12px; cursor: pointer; border-radius: 6px; transition: all 0.2s;">📝 Kịch Bản (Canvas)</button>
+                </div>
+
+                <!-- Form Group: Name -->
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label for="templateName" style="display:block; margin-bottom:6px; font-weight:500; font-size:12px;">Tên Mẫu:</label>
+                    <input type="text" id="templateName" class="input" style="width:100%;" placeholder="Nhập tên gợi nhớ (ví dụ: Intro Tech Phát Sáng)">
+                </div>
+
+                <!-- Tab Content: Video Upload -->
+                <div id="tabContentVideo">
+                    <div style="margin-bottom:14px; font-size:11px; color:var(--text-2); line-height:1.4;">
+                        ⚠️ Hỗ trợ file <strong>.mp4</strong>. Khuyên dùng upload cả 2 phiên bản dọc (9:16) và ngang (16:9) để tương thích tối đa khi render.
+                    </div>
+
+                    <!-- Dropzone 9:16 -->
+                    <div class="form-group" style="margin-bottom:16px;">
+                        <label style="display:block; margin-bottom:6px; font-weight:500; font-size:12px;">📱 Video dọc (9:16):</label>
+                        <div id="dropzone_9_16" class="upload-area" style="min-height: 100px; padding: 12px; border: 2px dashed var(--border-strong); border-radius:8px; cursor:pointer; text-align:center; background:var(--bg-2); position:relative;">
+                            <div class="upload-icon" style="font-size:20px; margin-bottom:2px;">📱</div>
+                            <div style="font-size:11.5px; font-weight:600;">Kéo thả hoặc Click để tải lên</div>
+                            <div style="font-size:9.5px; color:var(--text-3);">Tỉ lệ 1080x1920, tối đa 50MB</div>
+                            <input type="file" id="file_9_16" accept="video/mp4" style="display:none;" onchange="handleTemplateUploadSelected('9_16')">
+                            <div id="status_9_16" style="margin-top:6px; font-size:10.5px; display:none; align-items:center; justify-content:center; gap:6px;">
+                                <div class="spinner" style="width:12px; height:12px; border-width:1.5px;"></div>
+                                <span class="msg">Đang tải lên...</span>
+                            </div>
+                            <div id="done_9_16" style="margin-top:6px; font-size:10.5px; color:var(--success); display:none;">
+                                ✅ Đã tải lên: <span class="filename" style="font-family:var(--font-mono); font-size:10px;"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Dropzone 16:9 -->
+                    <div class="form-group" style="margin-bottom:16px;">
+                        <label style="display:block; margin-bottom:6px; font-weight:500; font-size:12px;">💻 Video ngang (16:9):</label>
+                        <div id="dropzone_16_9" class="upload-area" style="min-height: 100px; padding: 12px; border: 2px dashed var(--border-strong); border-radius:8px; cursor:pointer; text-align:center; background:var(--bg-2); position:relative;">
+                            <div class="upload-icon" style="font-size:20px; margin-bottom:2px;">💻</div>
+                            <div style="font-size:11.5px; font-weight:600;">Kéo thả hoặc Click để tải lên</div>
+                            <div style="font-size:9.5px; color:var(--text-3);">Tỉ lệ 1920x1080, tối đa 50MB</div>
+                            <input type="file" id="file_16_9" accept="video/mp4" style="display:none;" onchange="handleTemplateUploadSelected('16_9')">
+                            <div id="status_16_9" style="margin-top:6px; font-size:10.5px; display:none; align-items:center; justify-content:center; gap:6px;">
+                                <div class="spinner" style="width:12px; height:12px; border-width:1.5px;"></div>
+                                <span class="msg">Đang tải lên...</span>
+                            </div>
+                            <div id="done_16_9" style="margin-top:6px; font-size:10.5px; color:var(--success); display:none;">
+                                ✅ Đã tải lên: <span class="filename" style="font-family:var(--font-mono); font-size:10px;"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Script Save -->
+                <div id="tabContentScript" class="hidden">
+                    <div style="background:var(--bg-2); border:1px solid var(--border); padding:14px; border-radius:10px;">
+                        <h4 style="color:var(--accent); font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                            📝 Chụp thiết kế từ Slide hiện tại
+                        </h4>
+                        <p style="font-size:10.5px; line-height:1.45; color:var(--text-2); margin-bottom:10px;">
+                            Hệ thống sẽ chụp lại toàn bộ bố cục, màu sắc, hình nền, vị trí các đối tượng và mã Custom JS của Slide tương ứng để tạo mẫu thiết kế tái sử dụng:
+                        </p>
+                        <div style="background:var(--bg-3); border-left:3px solid var(--accent); padding:8px 12px; border-radius:6px; font-size:11px;">
+                            👉 Mẫu sẽ chụp <strong id="scriptStepCaptureLabel">Bước đầu tiên (Slide 1)</strong> của bài học.
+                        </div>
+                        
+                        <div id="scriptStepMiniPreview" style="margin-top:12px; background:var(--bg-0); border:1px solid var(--border); border-radius:6px; padding:10px; font-family:var(--font-mono); font-size:10.5px; color:var(--text-2); max-height:120px; overflow-y:auto; white-space:pre-wrap; line-height:1.4;">
+                            Đang tải xem trước...
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="border-top:1px solid var(--border); padding:16px 20px; display:flex; justify-content:flex-end; gap:12px;">
+                <button class="btn" onclick="closeAddTemplateModal()">Hủy</button>
+                <button class="btn btn-primary" id="btnSaveTemplate" onclick="saveCustomTemplate()" style="background:var(--accent-gradient); color:#000; font-weight:600;">💾 Lưu Mẫu</button>
+            </div>
+        </div>
+    </div>
+
+
+
+
+    <!-- AI Settings Modal -->
+    <div id="aiSettingsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ Cài đặt AI</h2>
+                <button class="close-btn" onclick="closeAISettingsModal()">✕</button>
+            </div>
+            <div class="modal-body" style="max-height: 60vh;">
+                <!-- VISION AI -->
+                <h3 style="font-size:13px; color:var(--accent); margin-bottom:10px;">👁️ Vision AI (Phân tích)</h3>
+                <div class="form-group">
+                    <div class="radio-group">
+                        <label><input type="radio" name="visionSource" value="cloud" checked onclick="toggleAISource('vision')"> Hệ thống (Cloud)</label>
+                        <label><input type="radio" name="visionSource" value="custom" onclick="toggleAISource('vision')"> Custom API</label>
+                    </div>
+                </div>
+                <div id="visionCloudAiSettings" class="settings-section">
+                    <div class="form-group"><label>Provider</label><select id="visionCloudProvider" class="select-input" onchange="loadCloudModels('vision')"></select></div>
+                    <div class="form-group"><label>Model</label><select id="visionCloudModel" class="select-input"></select></div>
+                </div>
+                <div id="visionCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group"><label>Base URL</label><input type="text" id="visionCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false"></div>
+                    <div class="form-group"><label>API Key</label><input type="password" id="visionCustomApiKey" class="input" placeholder="Nhập API Key nếu có" autocomplete="new-password"></div>
+                    <div class="form-group"><label>Model Name</label><input type="text" id="visionCustomModel" class="input" placeholder="llava, gpt-4-vision..." autocomplete="off" spellcheck="false"></div>
+                </div>
+                <!-- SCRIPT AI -->
+                <h3 style="font-size:13px; color:var(--cyan); margin-top:24px; margin-bottom:10px;">🧠 Script AI (Viết kịch bản)</h3>
+                <div class="form-group">
+                    <div class="radio-group">
+                        <label><input type="radio" name="scriptSource" value="cloud" checked onclick="toggleAISource('script')"> Hệ thống (Cloud)</label>
+                        <label><input type="radio" name="scriptSource" value="custom" onclick="toggleAISource('script')"> Custom API</label>
+                    </div>
+                </div>
+                <div id="scriptCloudAiSettings" class="settings-section">
+                    <div class="form-group"><label>Provider</label><select id="scriptCloudProvider" class="select-input" onchange="loadCloudModels('script')"></select></div>
+                    <div class="form-group"><label>Model</label><select id="scriptCloudModel" class="select-input"></select></div>
+                </div>
+                <div id="scriptCustomAiSettings" class="settings-section hidden">
+                    <div class="form-group"><label>Base URL</label><input type="text" id="scriptCustomBaseUrl" class="input" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false"></div>
+                    <div class="form-group"><label>API Key</label><input type="password" id="scriptCustomApiKey" class="input" placeholder="Nhập API Key nếu có" autocomplete="new-password"></div>
+                    <div class="form-group"><label>Model Name</label><input type="text" id="scriptCustomModel" class="input" placeholder="llama3, gpt-4..." autocomplete="off" spellcheck="false"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeAISettingsModal()">Hủy</button>
+                <button class="btn btn-primary" onclick="saveAISettings()">Lưu Cài Đặt</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Stop Autopilot Button (like Pod Studio) -->
+    <button id="floatStopBtn" class="btn btn-danger" style="display:none; position:fixed; bottom:30px; right:340px; z-index:9999; box-shadow:0 8px 30px rgba(0,0,0,0.5); padding:15px 25px; border-radius:30px; font-weight:600; font-size:14px;" onclick="stopAutopilot()">
+        ⏹ STOP AUTO-PILOT
+    </button>
+
+    <script src="/edu-video-studio-static/edu_studio.js?v=20260530_11"></script>
+</body>
+</html>

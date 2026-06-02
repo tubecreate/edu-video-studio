@@ -1,0 +1,48 @@
+{
+  "skill_id": "creator_economy",
+  "display_name": "🎬 Creator Economy",
+  "description": "Series sáng tạo nội dung, thương hiệu cá nhân, kinh tế số, sản phẩm digital — dùng animation storytelling, data visualization, phễu chuyển đổi",
+  "is_builtin": true,
+
+  "canvas_rules": {
+    "prefer_images": false,
+    "image_per_steps": 0,
+    "keyword_highlight": true,
+    "max_text_elements": 2,
+    "tone_marks_required": true
+  },
+
+  "voice_rules": {
+    "max_sentences_per_step": 3,
+    "max_words_per_step": 60,
+    "style": "storytelling, conversational, hook-driven, use real-world analogies and emotional triggers"
+  },
+
+  "prompt_injection": [
+    "Đây là bài giảng về CREATOR ECONOMY / KINH TẾ SỐ / THƯƠNG HIỆU CÁ NHÂN.",
+    "⚠️ NGUYÊN TẮC TỐI THƯỢNG — SÁNG TẠO THEO NỘI DUNG:",
+    "MỖI step phải có animation HOÀN TOÀN ĐỘC ĐÁO, được thiết kế riêng biệt để mô phỏng và giải thích đúng nội dung của step đó.",
+    "TUYỆT ĐỐI KHÔNG sử dụng lại các template tĩnh/chung chung (như roadmap, bridge, dashboard, compare...) nếu không có sự biến đổi mã nguồn tương ứng.",
+    "Tất cả phần tử `custom_js` phải có mã `code` JavaScript vẽ Canvas thủ công tuyệt đẹp, sử dụng HSL hoặc RGBA màu sắc hài hòa (đặc biệt là 'cyan', 'green', 'yellow', 'red', 'highlight' qua hàm rc(color)).",
+    "",
+    "⚠️ HƯỚNG DẪN KỸ THUẬT VÀ PHONG CÁCH VẼ CANVAS (BẮT BUỘC):",
+    "1. **Sequential Animation**: BẮT BUỘC dùng biến `stepProgress` (0.0 đến 1.0) để chia giai đoạn xuất hiện của hình vẽ. Chỉ dùng `time` cho các chuyển động tuần hoàn vô hạn (nhấp nháy, hạt bay, xoay tròn).",
+    "   Ví dụ: `const t = Math.min(1, stepProgress * 1.5);`",
+    "2. **Glassmorphism & Glow**: Sử dụng bóng mờ phát sáng bằng `ctx.shadowBlur` và `ctx.shadowColor` kết hợp với nền tối dày `rgba(15, 23, 42, 0.95)` để tạo cảm giác giao diện tương lai premium.",
+    "3. **Responsive**: Sử dụng `const isPortrait = H > W;` để tối ưu hóa bố cục dọc (dành cho TikTok/Shorts) hay ngang (YouTube).",
+    "4. **Canvas Return Height**: Kết thúc khối custom_js bằng lệnh `return 220;` hoặc chiều cao phù hợp tương ứng.",
+    "",
+    "⚠️ KHO KỸ THUẬT VISUAL GỢI Ý CHO CREATOR ECONOMY:",
+    "- **Vortex Sự Chú Ý (Attention Currency Flow)**: Vẽ hạt sáng/đồng xu (💰) bị hút vào một tâm điểm là biểu tượng con mắt (👁️) phát sáng.",
+    "- **Vòng tròn Phân Cực (99% vs 1%)**: Trái là đám mây hạt chuyển động hỗn loạn (tiêu thụ), Phải là một mặt trời năng lượng tỏa sáng rực rỡ (sáng tạo), có tia sáng bắn từ Trái qua Phải.",
+    "- **Đồng Hồ Cát Trực Quan (Attention Hourglass)**: Hạt cát lấp lánh chảy từ ngăn trên (Sự Chú Ý/24h) xuống ngăn dưới (Doanh Thu/Dòng Tiền).",
+    "- **Bánh Răng Đòn Bẩy (Leverage Gear)**: Bánh răng to xoay chậm kéo theo 4 bánh răng nhỏ xoay cực nhanh.",
+    "- **Phễu Chuyển Đổi 3D (3D Funnel)**: Vẽ phễu 3 tầng bằng các đường ellipse đồng tâm xếp chồng nhỏ dần, hạt sáng rơi xuyên phễu ngưng tụ thành đồng xu rực rỡ ở đáy phễu.",
+    "- **Radar Nhắm Mục Tiêu (Target Bullseye)**: Tâm hồng tâm radar bị bắn trúng bởi tia laser năng lượng, phát nổ ra hàng trăm hạt particle lấp lánh.",
+    "- **Tam Giác Đồng Thuận (Trinity Trust)**: 3 đỉnh tam giác (Nhất Quán - Tương Tác - Chân Thật) quay chậm phát sáng, tạo lõi năng lượng ở giữa.",
+    "- **Đường Sông Doanh Thu (Multi-stream River)**: Nhiều luồng sáng ngoằn ngoèo uốn lượn cùng chảy xiết đổ dồn vào một hồ chứa trung tâm.",
+    "- **Đòn Bẩy Archimedes**: Creator nhỏ bé dùng thanh đòn bẩy rất dài để nâng bổng một Trái đất/Tài sản khổng lồ.",
+    "- **Mã Quét Nhân Bản (Zero Cost Duplicator)**: Một khối trung tâm đi qua tia laser quét ngang dọc, nhân bản ra hàng loạt khối sáng bay ra vô tận.",
+    "- **Biểu Đồ Hàm Mũ (Exponential Growth Curve)**: Vẽ đường cong mượt mà vút thẳng đứng lên trời, có hạt sáng nhấp nháy chạy dọc đường cong."
+  ]
+}

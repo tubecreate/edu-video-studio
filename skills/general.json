@@ -1,0 +1,23 @@
+{
+  "skill_id": "general",
+  "display_name": "📋 Tổng quát",
+  "description": "Phong cách mặc định — phù hợp mọi loại nội dung giáo dục",
+  "is_builtin": true,
+
+  "canvas_rules": {
+    "prefer_images": true,
+    "image_per_steps": 2,
+    "image_style": "simple flat icon, minimal, clean, solid dark background",
+    "keyword_highlight": true,
+    "max_text_elements": 2,
+    "tone_marks_required": true
+  },
+
+  "voice_rules": {
+    "max_sentences_per_step": 5,
+    "max_words_per_step": 70,
+    "style": "clear, educational, friendly"
+  },
+
+  "prompt_injection": "Đây là bài giảng tổng quát. Áp dụng SYSTEM_PROMPT mặc định. Ưu tiên hình ảnh minh họa rõ ràng và ngắn gọn."
+}

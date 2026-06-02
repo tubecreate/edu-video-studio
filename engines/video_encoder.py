@@ -7,7 +7,7 @@ import json
 import asyncio
 import shutil
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from pathlib import Path
 
 logger = logging.getLogger("EduVideoStudio.VideoEncoder")
@@ -21,6 +21,112 @@ ENCODER_MAP = {
     "qsv":   {"codec": "h264_qsv",  "preset": "veryfast", "extra": ["-global_quality", "23", "-look_ahead", "0"]},
     "amf":   {"codec": "h264_amf",  "preset": "speed",    "extra": ["-rc", "cqp", "-qp_i", "22", "-qp_p", "22", "-usage", "transcoding"]},
 }
+
+
+def _find_executable(name: str) -> str:
+    """Find a working ffmpeg or ffprobe executable, avoiding the broken miniconda version."""
+    import os, shutil
+    preferred_dirs = [
+        r"C:\ffmpeg-7.1.1-essentials_build\bin",
+        r"C:\Users\ADMIN\AppData\Local\com.debpalash.omnivoice-studio\tools"
+    ]
+    for d in preferred_dirs:
+        exe_path = os.path.join(d, f"{name}.exe")
+        if os.path.exists(exe_path):
+            return exe_path
+    found = shutil.which(name)
+    if found:
+        if "miniconda3" in found.lower():
+            for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+                if not path_dir or "miniconda3" in path_dir.lower():
+                    continue
+                exe_path = os.path.join(path_dir, f"{name}.exe")
+                if os.path.exists(exe_path):
+                    return exe_path
+        return found
+    return name
+
+
+async def _concat_videos_ffmpeg(segments: List[str], output_path: str, aspect_ratio: str, gpu_encoder: str = "nvenc"):
+    """
+    Concatenate video segments cleanly using FFmpeg complex filter.
+    Ensures all segments are standardized to matching resolutions, 30 FPS, and resampled audio.
+    """
+    import shutil
+    import asyncio
+    
+    ffmpeg_exe = _find_executable("ffmpeg")
+    
+    # Target resolution based on aspect ratio
+    if aspect_ratio == "16:9":
+        tw, th = 1920, 1080
+    else:
+        tw, th = 1080, 1920
+        
+    enc = ENCODER_MAP.get(gpu_encoder, ENCODER_MAP["nvenc"])
+    
+    # Build filter complex inputs
+    filter_complex = ""
+    inputs = []
+    
+    for i, seg in enumerate(segments):
+        inputs.extend(["-i", seg])
+        # scale each segment to exact target, pad to avoid skew, format yuv420p at 30 fps
+        filter_complex += f"[{i}:v]scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p[v{i}];"
+        # Audio resample to standard 44100Hz stereo
+        filter_complex += f"[{i}:a]aresample=44100,pan=stereo[a{i}];"
+        
+    # Now concatenate audio and video elements
+    for i in range(len(segments)):
+        filter_complex += f"[v{i}][a{i}]"
+    filter_complex += f"concat=n={len(segments)}:v=1:a=1[outv][outa]"
+    
+    cmd = [
+        ffmpeg_exe, "-y", "-threads", "0"
+    ] + inputs + [
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", enc["codec"], "-preset", enc["preset"]
+    ]
+    
+    if enc.get("extra"):
+        cmd.extend(enc["extra"])
+        
+    cmd.extend([
+        "-c:a", "aac", "-b:a", "128k",
+        output_path
+    ])
+    
+    logger.info(f"[Concat] Stitching {len(segments)} segments using {gpu_encoder}...")
+    
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    
+    if proc.returncode != 0:
+        # Fallback to CPU libx264 if GPU encoder fails during stitching
+        if gpu_encoder != "cpu":
+            logger.warning(f"[Concat] GPU encoding failed, falling back to CPU...")
+            cpu_enc = ENCODER_MAP["cpu"]
+            cpu_cmd = [
+                ffmpeg_exe, "-y", "-threads", "0"
+            ] + inputs + [
+                "-filter_complex", filter_complex,
+                "-map", "[outv]", "-map", "[outa]",
+                "-c:v", cpu_enc["codec"], "-preset", cpu_enc["preset"]
+            ] + cpu_enc.get("extra", []) + [
+                "-c:a", "aac", "-b:a", "128k",
+                output_path
+            ]
+            proc_fb = await asyncio.create_subprocess_exec(
+                *cpu_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr_fb = await proc_fb.communicate()
+            if proc_fb.returncode != 0:
+                raise RuntimeError(f"FFmpeg concat fallback failed: {stderr_fb.decode()[:300]}")
+        else:
+            raise RuntimeError(f"FFmpeg concat failed: {stderr.decode()[:300]}")
 
 
 def _find_node_modules():
@@ -60,8 +166,13 @@ async def render_and_encode(
     output_dir: str,
     project_id: str,
     theme: str = "dark",
+    bg_color: str = "",
+    aspect_ratio: str = "9:16",
+    art_style: str = "default",
     render_mode: str = "pipe",
     gpu_encoder: str = "nvenc",
+    intro_video_path: Optional[str] = None,
+    outro_video_path: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
 ) -> str:
     """Render + encode video. Supports 'pipe' and 'frames' modes."""
@@ -75,21 +186,59 @@ async def render_and_encode(
     ext_dir = Path(__file__).parent.parent
 
     audio_path = os.path.join(os.path.dirname(script_path), "audio", "full_audio.mp3")
-    final_video = os.path.join(output_dir, f"edu_{project_id}.mp4")
+    aspect_suffix = aspect_ratio.replace(":", "_")
+    final_video = os.path.join(output_dir, f"edu_{project_id}_{aspect_suffix}.mp4")
 
     env = os.environ.copy()
     env["NODE_PATH"] = str(node_modules)
 
+    # 1. Render primary slide content video
     if render_mode == "pipe":
-        return await _render_pipe(
+        await _render_pipe(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback, gpu_encoder,
+            theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder,
         )
     else:
-        return await _render_frames(
+        await _render_frames(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback, gpu_encoder,
+            theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder,
         )
+
+    # 2. Perform FFmpeg stitching if custom video Intro or Outro template is selected
+    if intro_video_path or outro_video_path:
+        if progress_callback:
+            progress_callback(97, "🎬 Nối ghép Intro/Outro video...")
+            
+        segments = []
+        if intro_video_path:
+            segments.append(intro_video_path)
+        segments.append(final_video)
+        if outro_video_path:
+            segments.append(outro_video_path)
+            
+        stitched_temp = final_video + ".stitched.mp4"
+        try:
+            await _concat_videos_ffmpeg(segments, stitched_temp, aspect_ratio, gpu_encoder)
+            if os.path.exists(stitched_temp):
+                os.replace(stitched_temp, final_video)
+                logger.info(f"Stitching success! Combined video: {final_video}")
+        except Exception as e:
+            logger.error(f"FFmpeg concatenation failed: {e}")
+            if os.path.exists(stitched_temp):
+                try:
+                    os.remove(stitched_temp)
+                except Exception:
+                    pass
+            # We degrade gracefully: return the unstitched final_video instead of crashing
+            if progress_callback:
+                progress_callback(99, "⚠️ Lỗi ghép video, giữ lại video gốc...")
+
+    if progress_callback:
+        progress_callback(100, "Video export complete!")
+
+    file_size = os.path.getsize(final_video)
+    logger.info(f"Final: {final_video} ({file_size / 1024 / 1024:.1f} MB)")
+    return final_video
 
 
 async def _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, pct_range=(8, 96)):
@@ -101,6 +250,20 @@ async def _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, pct
         cwd=str(ext_dir),
         env=env,
     )
+    
+    stderr_lines = []
+    async def read_stderr():
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                stderr_lines.append(line)
+        except Exception:
+            pass
+
+    stderr_task = asyncio.create_task(read_stderr())
+    
     pct_start, pct_end = pct_range
     while True:
         line = await proc.stdout.readline()
@@ -119,15 +282,20 @@ async def _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, pct
                 pass
 
     await proc.wait()
-    stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")
+    await stderr_task
+    
+    stderr_content = b"".join(stderr_lines).decode("utf-8", errors="replace")
     if proc.returncode != 0:
-        logger.error(f"Renderer error: {stderr[:500]}")
-        raise RuntimeError(f"Render failed: {stderr[:300]}")
+        # Filter out info lines to find actual error
+        error_lines = [l for l in stderr_content.split('\n') if l.strip() and not l.strip().startswith('[Renderer]')]
+        error_msg = '\n'.join(error_lines[-20:]) if error_lines else stderr_content[-2000:]
+        logger.error(f"Renderer error: {error_msg[:2000]}")
+        raise RuntimeError(f"Render failed: {error_msg[:2000]}")
     return proc
 
 
 async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
-                       theme, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
+                       theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
     """PIPE MODE: render + encode in single step (fast)."""
     enc = ENCODER_MAP.get(gpu_encoder, ENCODER_MAP["nvenc"])
     cmd = [
@@ -135,7 +303,8 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
         "--script", script_path,
         "--timing", timing_path,
         "--output", output_dir,
-        "--theme", theme,
+        "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+        "--style", art_style,
         "--fps", "30",
         "--mode", "pipe",
         "--outputFile", final_video,
@@ -161,7 +330,7 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
             progress_callback(10, "⚠️ Pipe failed, switching to CPU frames mode...")
         return await _render_frames(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback, "cpu",
+            theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
         )
 
     if not os.path.isfile(final_video):
@@ -171,7 +340,7 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
             progress_callback(10, "⚠️ No output, switching to CPU frames mode...")
         return await _render_frames(
             node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, audio_path, final_video, env, progress_callback, "cpu",
+            theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
         )
 
     if progress_callback:
@@ -183,7 +352,7 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
 
 
 async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir,
-                          theme, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
+                          theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
     """FRAMES MODE: render PNGs then FFmpeg encode (stable)."""
     frames_dir = os.path.join(os.path.dirname(script_path), "frames")
     os.makedirs(frames_dir, exist_ok=True)
@@ -199,7 +368,8 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
         "--script", script_path,
         "--timing", timing_path,
         "--output", frames_dir,
-        "--theme", theme,
+        "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+        "--style", art_style,
         "--fps", "30",
         "--mode", "frames",
     ]
@@ -221,7 +391,7 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
     if progress_callback:
         progress_callback(68, f"🎬 Encoding ({encoder_label})...")
 
-    ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+    ffmpeg_exe = _find_executable("ffmpeg")
     raw_video = os.path.join(output_dir, f"raw_{os.path.basename(final_video)}")
     frame_pattern = os.path.join(frames_dir, "frame_%06d.jpg")
 

@@ -11,11 +11,36 @@ from typing import Optional, Callable
 logger = logging.getLogger("EduVideoStudio.AudioEngine")
 
 
+def _find_executable(name: str) -> str:
+    """Find a working ffmpeg or ffprobe executable, avoiding the broken miniconda version."""
+    import os, shutil
+    preferred_dirs = [
+        r"C:\ffmpeg-7.1.1-essentials_build\bin",
+        r"C:\Users\ADMIN\AppData\Local\com.debpalash.omnivoice-studio\tools"
+    ]
+    for d in preferred_dirs:
+        exe_path = os.path.join(d, f"{name}.exe")
+        if os.path.exists(exe_path):
+            return exe_path
+    found = shutil.which(name)
+    if found:
+        if "miniconda3" in found.lower():
+            for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+                if not path_dir or "miniconda3" in path_dir.lower():
+                    continue
+                exe_path = os.path.join(path_dir, f"{name}.exe")
+                if os.path.exists(exe_path):
+                    return exe_path
+        return found
+    return name
+
+
 async def _get_audio_duration(filepath: str) -> float:
     """Get audio duration in seconds using ffprobe."""
     try:
+        ffprobe_exe = _find_executable("ffprobe")
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", filepath,
+            ffprobe_exe, "-v", "quiet", "-print_format", "json", "-show_format", filepath,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await proc.communicate()
@@ -103,17 +128,23 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "http://localhost:5295/api/v1/tts/synthesize",
-                json={"text": text, "voice": voice, "engine": engine},
+                json={"text": text, "voice": voice, "engine": engine, "preprocess_prompt": False},
             )
             if resp.status_code != 200:
-                logger.warning(f"TTS synthesize failed: HTTP {resp.status_code}")
-                return False, []
+                err_msg = f"HTTP {resp.status_code}"
+                try:
+                    err_msg += f": {resp.json().get('message')}"
+                except Exception:
+                    err_msg += f": {resp.text}"
+                logger.warning(f"TTS synthesize failed: {err_msg}")
+                raise RuntimeError(err_msg)
 
             data = resp.json()
             task_id = data.get("task_id")
             if not task_id:
-                logger.warning(f"TTS synthesize returned no task_id: {data}")
-                return False, []
+                err_msg = data.get("message") or f"TTS synthesize returned no task_id: {data}"
+                logger.warning(err_msg)
+                raise RuntimeError(err_msg)
 
             logger.info(f"[audio_engine] TTS task {task_id} started (engine={engine})")
 
@@ -151,8 +182,12 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
                     break
 
                 elif task_status in ERROR_STATUSES:
-                    logger.warning(f"[audio_engine] TTS task {task_id} failed: {sdata.get('result', {})}")
-                    break
+                    err_res = sdata.get("result") or {}
+                    err_msg = err_res.get("message") if isinstance(err_res, dict) else str(err_res)
+                    if not err_msg:
+                        err_msg = sdata.get("message") or "Unknown TTS engine error"
+                    logger.warning(f"[audio_engine] TTS task {task_id} failed: {err_msg}")
+                    raise RuntimeError(err_msg)
 
                 elif task_status in WAIT_STATUSES:
                     if poll_n % 10 == 0:
@@ -165,6 +200,10 @@ async def _generate_tts_internal(text: str, voice: str, output_path: str, engine
             return False, []
 
     except Exception as e:
+        if engine != "edge":
+            # Do not fallback to edge-tts if it's a dedicated engine that failed
+            logger.error(f"Internal TTS API failed ({engine}): {e}")
+            raise e
         logger.warning(f"Internal TTS API failed ({engine}): {e}, falling back to edge-tts")
 
     # Fallback to edge-tts with word boundaries
@@ -200,7 +239,8 @@ async def _merge_audio_files(audio_files: list, output_path: str, gaps: list = N
 
     filter_str = "".join(filter_parts) + f"concat=n={len(filter_parts)}:v=0:a=1[out]"
 
-    cmd = ["ffmpeg", "-y"] + inputs + [
+    ffmpeg_exe = _find_executable("ffmpeg")
+    cmd = [ffmpeg_exe, "-y"] + inputs + [
         "-filter_complex", filter_str,
         "-map", "[out]",
         "-c:a", "libmp3lame", "-b:a", "128k",
@@ -230,7 +270,7 @@ async def generate_tts_for_script(
     timing_steps = []
     audio_files = []
     current_offset = 0.0
-    GAP = 0.5  # seconds between steps
+    GAP = 0.5  # seconds between steps to hold visual settled results
 
     for i, step in enumerate(steps):
         voice_text = step.get("voice_text", "").strip()
@@ -246,8 +286,9 @@ async def generate_tts_for_script(
             audio_filename = f"step_{step_id:03d}.mp3"
             audio_path = os.path.join(output_dir, audio_filename)
             try:
+                ffmpeg_exe = _find_executable("ffmpeg")
                 silence_cmd = [
-                    "ffmpeg", "-y", "-f", "lavfi", "-i",
+                    ffmpeg_exe, "-y", "-f", "lavfi", "-i",
                     f"anullsrc=channel_layout=mono:sample_rate=24000:duration={duration}",
                     "-c:a", "libmp3lame", "-b:a", "32k", audio_path
                 ]
@@ -274,17 +315,31 @@ async def generate_tts_for_script(
         audio_filename = f"step_{step_id:03d}.mp3"
         audio_path = os.path.join(output_dir, audio_filename)
 
-        success, word_boundaries = await _generate_tts_internal(voice_text, voice, audio_path, tts_engine)
+        if i > 0:
+            await asyncio.sleep(0.3)  # Tiny rate-limit prevention delay
+
+        success = False
+        word_boundaries = []
+        last_error = "Unknown error"
+        for attempt in range(3):
+            try:
+                success, word_boundaries = await _generate_tts_internal(voice_text, voice, audio_path, tts_engine)
+                if success and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
+                    break
+            except Exception as ex:
+                last_error = str(ex)
+                logger.warning(f"TTS attempt {attempt+1} failed for step {step_id}: {ex}")
+            if attempt < 2:
+                await asyncio.sleep(0.8 * (attempt + 1))  # Exponential backoff
+        else:
+            success = False
 
         if success and os.path.exists(audio_path):
             duration = await _get_audio_duration(audio_path)
             if duration < 0.5:
                 duration = max(len(voice_text) * 0.08, 2.0)
         else:
-            duration = max(len(voice_text) * 0.08, 2.0)
-            logger.warning(f"TTS failed for step {step_id}, using estimated duration {duration:.1f}s")
-            audio_path = None
-            audio_filename = None
+            raise RuntimeError(f"TTS generation failed for step {step_id}: {last_error}")
 
         # Shift word boundaries by current_offset so they're absolute times
         shifted_words = []
@@ -317,7 +372,8 @@ async def generate_tts_for_script(
     if audio_files:
         if progress_callback:
             progress_callback(92, "Merging audio files...")
-        await _merge_audio_files(audio_files, merged_path)
+        gaps = [GAP] * (len(audio_files) - 1)
+        await _merge_audio_files(audio_files, merged_path, gaps=gaps)
 
     timing_map = {
         "steps": timing_steps,
@@ -332,3 +388,56 @@ async def generate_tts_for_script(
 
     logger.info(f"TTS complete: {len(timing_steps)} steps, {total_duration:.1f}s total")
     return timing_map
+
+
+async def generate_tts_for_step(
+    step_id: int,
+    voice_text: str,
+    output_dir: str,
+    voice: str = "vi-VN-HoaiMyNeural",
+    tts_engine: str = "edge",
+) -> tuple[bool, float, list]:
+    """Generate TTS audio for a single step. Returns (success, duration, word_boundaries)."""
+    os.makedirs(output_dir, exist_ok=True)
+    audio_filename = f"step_{step_id:03d}.mp3"
+    audio_path = os.path.join(output_dir, audio_filename)
+    
+    if not voice_text:
+        duration = 2.0
+        try:
+            ffmpeg_exe = _find_executable("ffmpeg")
+            silence_cmd = [
+                ffmpeg_exe, "-y", "-f", "lavfi", "-i",
+                f"anullsrc=channel_layout=mono:sample_rate=24000:duration={duration}",
+                "-c:a", "libmp3lame", "-b:a", "32k", audio_path
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *silence_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            if proc.returncode == 0 and os.path.exists(audio_path):
+                return True, duration, []
+        except Exception as e:
+            logger.warning(f"Failed to create silence for step {step_id}: {e}")
+        return False, 0.0, []
+
+    success = False
+    word_boundaries = []
+    last_error = "Unknown error"
+    for attempt in range(3):
+        try:
+            success, word_boundaries = await _generate_tts_internal(voice_text, voice, audio_path, tts_engine)
+            if success and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
+                break
+        except Exception as ex:
+            last_error = str(ex)
+            logger.warning(f"TTS single step attempt {attempt+1} failed for step {step_id}: {ex}")
+        if attempt < 2:
+            await asyncio.sleep(0.8 * (attempt + 1))
+            
+    if success and os.path.exists(audio_path):
+        duration = await _get_audio_duration(audio_path)
+        return True, round(duration, 3), word_boundaries
+        
+    raise RuntimeError(f"TTS single step generation failed: {last_error}")
+

@@ -8,3 +8,6 @@ frames/
 *.mp3
 .DS_Store
 .vscode/
+temp_*.py
+_test_script.json
+_inspect*.py

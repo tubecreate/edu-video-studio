@@ -1,0 +1,23 @@
+{
+  "skill_id": "storytelling",
+  "display_name": "📖 Kể chuyện",
+  "description": "Kể chuyện lịch sử, truyện ngụ ngôn, câu chuyện giáo dục — nhiều ảnh bối cảnh",
+  "is_builtin": true,
+
+  "canvas_rules": {
+    "prefer_images": true,
+    "image_per_steps": 1,
+    "image_style": "cinematic scene illustration, watercolor or painterly style, story atmosphere, solid dark background",
+    "keyword_highlight": true,
+    "max_text_elements": 1,
+    "tone_marks_required": true
+  },
+
+  "voice_rules": {
+    "max_sentences_per_step": 3,
+    "max_words_per_step": 55,
+    "style": "narrative, dramatic, immersive, descriptive"
+  },
+
+  "prompt_injection": "Đây là nội dung KỂ CHUYỆN / LỊCH SỬ / TRUYỆN NGỤ NGÔN.\nYÊU CẦU BẮT BUỘC:\n1. GIỮ NGUYÊN 100% lời kể gốc — KHÔNG tóm tắt, KHÔNG cắt bớt câu nào.\n2. Chia câu chuyện thành nhiều step nhỏ, MỖI step 1-3 câu liên tục.\n3. BẮT BUỘC chèn `image_generation` vào ÍT NHẤT 60% số steps — mỗi ảnh minh họa cho bối cảnh/nhân vật/hành động trong đoạn đang kể.\n4. Prompt ảnh phải mô tả cảnh vật, nhân vật, không khí của đoạn đó — phong cách tranh minh họa, dramatic.\n5. Canvas CHỈ hiển thị 1 text lớn tóm tắt cảm xúc hoặc tên nhân vật/địa danh chính trong đoạn.\n6. KHÔNG viết đoạn văn lên màn hình — mọi nội dung kể đều đặt trong voice_text.\n7. Dùng `clear: true` khi chuyển sang bối cảnh/thời gian/địa điểm hoàn toàn mới."
+}
