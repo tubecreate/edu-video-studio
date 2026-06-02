@@ -442,7 +442,7 @@ const STYLE_PALETTES = {
 
 
 
-        font: "Consolas, 'Courier New', monospace",
+        font: "Orbitron, 'JetBrains Mono', sans-serif",
 
 
 
@@ -4965,7 +4965,7 @@ function renderElementAtY(el, cursorY, stepProgress) {
                         get(target, prop) {
                             if (prop === 'drawImage') {
                                 return function(img, ...args) {
-                                    if (isLightStyle && img && typeof img.src === 'string' && img.src.toLowerCase().includes('logo')) {
+                                    if (isLightStyle && img && typeof img.src === 'string' && img.src.toLowerCase().includes('logo') && !img.src.toLowerCase().includes('logo_tubecreate') && !img.src.toLowerCase().includes('tubecreate')) {
                                         target.save();
                                         target.fillStyle = 'rgba(15, 23, 42, 0.95)';
                                         target.strokeStyle = 'rgba(255, 255, 255, 0.1)';
@@ -5023,7 +5023,7 @@ function renderElementAtY(el, cursorY, stepProgress) {
                                 });
 
                                 let scaleFactor = 1.0;
-                                if (artStyle === 'pixel') scaleFactor = 0.55;
+                                if (artStyle === 'pixel') scaleFactor = 0.85;
                                 else if (artStyle === 'cyberpunk') scaleFactor = 0.78;
                                 else if (artStyle === 'cartoon') scaleFactor = 0.85;
                                 else if (artStyle === 'sketch') scaleFactor = 0.85;
@@ -5071,7 +5071,45 @@ function renderElementAtY(el, cursorY, stepProgress) {
 
 
 
-                                    const isDarkColor = (val) => {
+                                          const isLightColor = (val) => {
+                                         if (!val) return false;
+                                         const lower = val.toLowerCase().trim();
+                                         if (lower === 'transparent' || lower === 'none' || lower === 'inherit' || lower === 'initial') return false;
+                                         if (lower === 'text' || lower === 'title' || lower === 'muted' || lower === 'highlight' || lower === 'cyan' || lower === 'green' || lower === 'red' || lower === 'yellow' || lower === 'orange' || lower === 'blue') {
+                                             return false;
+                                         }
+                                         let r = 255, g = 255, b = 255;
+                                         if (lower.startsWith('#')) {
+                                             const hex = lower.slice(1);
+                                             if (hex.length === 3 || hex.length === 4) {
+                                                 r = parseInt(hex[0] + hex[0], 16);
+                                                 g = parseInt(hex[1] + hex[1], 16);
+                                                 b = parseInt(hex[2] + hex[2], 16);
+                                             } else if (hex.length === 6 || hex.length === 8) {
+                                                 r = parseInt(hex.slice(0, 2), 16);
+                                                 g = parseInt(hex.slice(2, 4), 16);
+                                                 b = parseInt(hex.slice(4, 6), 16);
+                                             } else {
+                                                 return false;
+                                             }
+                                         } else if (lower.startsWith('rgba') || lower.startsWith('rgb')) {
+                                             const match = lower.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+                                             if (match) {
+                                                 r = parseInt(match[1]);
+                                                 g = parseInt(match[2]);
+                                                 b = parseInt(match[3]);
+                                             } else {
+                                                 return false;
+                                             }
+                                         } else {
+                                             const namedWhites = ['white', 'whitesmoke', 'aliceblue', 'azure', 'ghostwhite', 'honeydew', 'ivory', 'lavender', 'linen', 'snow', 'seashell', 'lightgray', 'lightgrey', 'gainsboro', 'silver'];
+                                             if (namedWhites.includes(lower)) return true;
+                                             return false;
+                                         }
+                                         return (r + g + b) / 3 > 195;
+                                     };
+
+                                     const isDarkColor = (val) => {
 
                                         if (!val) return false;
 
@@ -5138,24 +5176,12 @@ function renderElementAtY(el, cursorY, stepProgress) {
                                         else if (lowerVal === '#ccc' || lowerVal === '#bbb' || lowerVal === '#aaa' || lowerVal === '#999' || lowerVal === '#888' || lowerVal === '#d0d0ff' || lowerVal === '#e0e0ff' || lowerVal === '#c0c0c0' || lowerVal === '#d3d3d3' || lowerVal.includes('rgba(204,204,204') || lowerVal.includes('rgba(187,187,187') || lowerVal.includes('rgba(170,170,170') || lowerVal.includes('rgba(204, 204, 204') || lowerVal.includes('rgba(187, 187, 187') || lowerVal.includes('rgba(170, 170, 170')) {
                                             newVal = rc('muted');
                                         }
-                                        else if (
-                                            lowerVal === '#fff' || lowerVal === '#ffffff' ||
-                                            lowerVal === '#fcfbfa' || lowerVal === '#fdfbf7' || lowerVal === '#efe9db' || lowerVal === '#f5f2eb' ||
-                                            lowerVal.startsWith('#fff') || lowerVal.startsWith('#fcfbfa') || lowerVal.startsWith('#fdfbf7') ||
-                                            lowerVal.includes('rgba(255,255,255') || lowerVal.includes('rgba(255, 255, 255') ||
-                                            lowerVal.includes('rgba(252,251,250') || lowerVal.includes('rgba(252, 251, 250') ||
-                                            lowerVal.includes('rgba(253,251,247') || lowerVal.includes('rgba(253, 251, 247')
-                                        ) {
-                                            // Extract alpha if present (e.g. #ffffffBB or #fcfbfa22 or rgba(255,255,255,alpha))
+                                                                                else if (isLightColor(lowerVal)) {
                                             let alpha = 1.0;
-                                            
-                                            // Case 1: rgba format
                                             const rgbaMatch = lowerVal.match(/rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\)/);
                                             if (rgbaMatch) {
                                                 alpha = parseFloat(rgbaMatch[4]);
-                                            }
-                                            // Case 2: Hex with alpha (e.g. #ffffffbb (8 chars) or #fffb (4 chars))
-                                            else if (lowerVal.startsWith('#')) {
+                                            } else if (lowerVal.startsWith('#')) {
                                                 const hex = lowerVal.slice(1);
                                                 if (hex.length === 8) {
                                                     alpha = parseInt(hex.slice(6, 8), 16) / 255;
@@ -5163,29 +5189,38 @@ function renderElementAtY(el, cursorY, stepProgress) {
                                                     alpha = (parseInt(hex.slice(3, 4), 16) * 17) / 255;
                                                 }
                                             }
-                                            
-                                            // Limit alpha precision to 3 decimals
                                             alpha = Math.round(alpha * 1000) / 1000;
                                             
-                                            // Map to dark slate (rc('text') equivalent rgb(30, 41, 59) or similar) with original alpha
+                                            let r = 255, g = 255, b = 255;
+                                            if (lowerVal.startsWith('#')) {
+                                                const hex = lowerVal.slice(1);
+                                                if (hex.length >= 6) {
+                                                    r = parseInt(hex.slice(0, 2), 16);
+                                                    g = parseInt(hex.slice(2, 4), 16);
+                                                    b = parseInt(hex.slice(4, 6), 16);
+                                                } else if (hex.length >= 3) {
+                                                    r = parseInt(hex[0]+hex[0], 16);
+                                                    g = parseInt(hex[1]+hex[1], 16);
+                                                    b = parseInt(hex[2]+hex[2], 16);
+                                                }
+                                            } else if (lowerVal.startsWith('rgba') || lowerVal.startsWith('rgb')) {
+                                                const match = lowerVal.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+                                                if (match) {
+                                                    r = parseInt(match[1]);
+                                                    g = parseInt(match[2]);
+                                                    b = parseInt(match[3]);
+                                                }
+                                            }
+                                            const avg = (r + g + b) / 3;
+                                            
                                             if (alpha < 1.0) {
                                                 newVal = `rgba(30, 41, 59, ${alpha})`;
                                             } else {
-                                                newVal = rc('text');
+                                                newVal = avg > 245 ? rc('text') : rc('muted');
                                             }
                                         }
 
-
-
-                                    }
-
-
-
-                                    
-
-
-
-                                    // Make sure neon standard names mapped properly
+                                    }// Make sure neon standard names mapped properly
 
 
 
@@ -8054,50 +8089,8 @@ function renderFrame(currentTime) {
 
 
     if (artStyle === 'pixel') {
-
-
-
-        const scale = 0.15; // 8-bit retro downscaling
-
-
-
-        const tempCvs = createCanvas(Math.max(1, W * scale), Math.max(1, H * scale));
-
-
-
-        const tempCtx = tempCvs.getContext('2d');
-
-
-
-        tempCtx.imageSmoothingEnabled = false;
-
-
-
-        tempCtx.drawImage(canvas, 0, 0, tempCvs.width, tempCvs.height);
-
-
-
-        
-
-
-
         ctx.save();
-
-
-
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-
-
-        ctx.clearRect(0, 0, W, H);
-
-
-
-        ctx.imageSmoothingEnabled = false;
-
-
-
-        ctx.drawImage(tempCvs, 0, 0, W, H);
 
 
 
@@ -8149,11 +8142,11 @@ function renderFrame(currentTime) {
 
 
 
-        ctx.fillText('CRT SCAN: 240P', MX, H - 40);
+        ctx.fillText('CYBER SCAN: ACTIVE', MX, H - 40);
 
 
 
-        ctx.fillText('INSERT COIN', W - MX - 140, H - 40);
+        ctx.fillText('READY PLAYER 1', W - MX - 180, H - 40);
 
 
 
