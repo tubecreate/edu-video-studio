@@ -32,37 +32,47 @@ def _load_engine(module_name: str):
     """Load an engine module by name from the engines/ directory.
 
     Uses a multi-step fallback to handle machines where the extension folder
-    may be named differently (e.g. 'eduvideo_studio' vs 'edu_video_studio').
+    may be named differently (e.g. 'eduvideo_studio' vs 'edu_video_studio'):
+
+    1. Primary: engines/ next to __file__ (same folder as edu_routes.py)
+    2. extension_manager lookup with all known name variants
+    3. Scan ALL sibling folders with 'edu'+'video'/'studio' in name
+       → critical for when OLD install (eduvideo_studio, no engines) is active
+         but NEW git clone (edu_video_studio, has engines) is a sibling
     """
     candidates = []
 
-    # 1. Primary: engines/ next to __file__ (works in any folder name)
+    # 1. Primary: engines/ next to __file__
     candidates.append(os.path.join(_ENGINES_DIR, f"{module_name}.py"))
 
-    # 2. Try extension_manager with all known name variants
+    # 2. Try extension_manager with known name variants
     if not any(os.path.isfile(c) for c in candidates):
         try:
             from tubecli.core.extension_manager import extension_manager
             for ext_name in ["edu_video_studio", "eduvideo_studio", "edu-video-studio"]:
                 ext = extension_manager.get(ext_name)
                 if ext and getattr(ext, "extension_dir", None):
-                    candidates.append(
-                        os.path.join(ext.extension_dir, "engines", f"{module_name}.py")
-                    )
+                    c = os.path.join(ext.extension_dir, "engines", f"{module_name}.py")
+                    if c not in candidates:
+                        candidates.append(c)
         except Exception:
             pass
 
-    # 3. Last resort: scan siblings of _EXT_DIR for any folder with engines/
+    # 3. Scan ALL sibling folders of _EXT_DIR that look like this extension.
+    #    This is the critical fallback: if eduvideo_studio (old, no engines) is
+    #    loaded but edu_video_studio (new, has engines) is a sibling, we find it.
     if not any(os.path.isfile(c) for c in candidates):
         try:
             ext_base = os.path.dirname(_EXT_DIR)
             for entry in sorted(os.listdir(ext_base)):
-                entry_lower = entry.lower().replace("-", "_")
-                if "edu" in entry_lower and "video" in entry_lower:
-                    candidate = os.path.join(ext_base, entry, "engines", f"{module_name}.py")
-                    if os.path.isfile(candidate):
-                        candidates.append(candidate)
-                        break
+                entry_dir = os.path.join(ext_base, entry)
+                if not os.path.isdir(entry_dir):
+                    continue
+                el = entry.lower().replace("-", "_")
+                if "edu" in el and ("video" in el or "studio" in el):
+                    c = os.path.join(entry_dir, "engines", f"{module_name}.py")
+                    if c not in candidates and os.path.isfile(c):
+                        candidates.append(c)
         except Exception:
             pass
 
@@ -72,14 +82,15 @@ def _load_engine(module_name: str):
     if not os.path.isfile(module_file):
         raise FileNotFoundError(
             f"Engine '{module_name}' not found.\n"
-            f"Searched paths:\n" + "\n".join(f"  - {c}" for c in candidates) +
-            f"\nMake sure the edu_video_studio extension is installed correctly and engines/ folder exists."
+            f"Searched:\n" + "\n".join(f"  - {c}" for c in candidates) +
+            f"\nMake sure the extension is up-to-date (git pull in the extension folder)."
         )
 
     spec = importlib.util.spec_from_file_location(f"edu_engines.{module_name}", module_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
 
 
 
