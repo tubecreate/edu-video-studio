@@ -47886,6 +47886,8 @@ async function renderVideo(overrideAspect = null) {
 
 
 
+    const lockContainer = document.getElementById('renderLockContainer');
+    if (lockContainer) lockContainer.classList.add('hidden');
     statusEl.classList.remove('hidden');
 
 
@@ -49134,7 +49136,11 @@ async function renderVideo(overrideAspect = null) {
 
 
 
-        msgEl.textContent = `❌ Lỗi: ${err.message}`;
+        if (err.message && (err.message.includes("tiến trình render khác") || err.message.includes("GPU"))) {
+            showRenderLockError(err.message);
+        } else {
+            msgEl.textContent = `❌ Lỗi: ${err.message}`;
+        }
 
 
 
@@ -49151,6 +49157,9 @@ async function renderVideo(overrideAspect = null) {
 
 
         btn.disabled = false;
+        const btnRenderDual = document.getElementById('btnRenderDual');
+        if (btnRenderDual) btnRenderDual.disabled = false;
+        throw err;
 
 
 
@@ -56926,7 +56935,7 @@ function _runPreviewFrame(ctx, cvs) {
 
 
 
-        ff = '"Architects Daughter", "Segoe Print", "Comic Sans MS", cursive';
+        ff = '"Pangolin", "Pangolin-Regular", "Pangolin Regular", sans-serif';
 
 
 
@@ -63988,6 +63997,55 @@ function _runPreviewFrame(ctx, cvs) {
 
 
 
+                            const toGrayscale = (colorStr) => {
+                                if (typeof colorStr !== 'string') return colorStr;
+                                const trimmed = colorStr.trim();
+                                const lower = trimmed.toLowerCase();
+                                if (lower.startsWith('hsl')) {
+                                    return trimmed.replace(/hsl(a?)\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)%?\s*,/i, 'hsl$1($2, 0%,');
+                                }
+                                const rgbMatch = trimmed.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+                                if (rgbMatch) {
+                                    const r = parseInt(rgbMatch[1]);
+                                    const g = parseInt(rgbMatch[2]);
+                                    const b = parseInt(rgbMatch[3]);
+                                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                                    if (rgbMatch[4] !== undefined) {
+                                        return `rgba(${gray}, ${gray}, ${gray}, ${rgbMatch[4]})`;
+                                    } else {
+                                        return `rgb(${gray}, ${gray}, ${gray})`;
+                                    }
+                                }
+                                if (trimmed.startsWith('#')) {
+                                    const hex = trimmed.slice(1);
+                                    let r = 255, g = 255, b = 255, a = '';
+                                    if (hex.length === 3 || hex.length === 4) {
+                                        r = parseInt(hex[0] + hex[0], 16);
+                                        g = parseInt(hex[1] + hex[1], 16);
+                                        b = parseInt(hex[2] + hex[2], 16);
+                                        if (hex.length === 4) a = hex[3] + hex[3];
+                                    } else if (hex.length === 6 || hex.length === 8) {
+                                        r = parseInt(hex.slice(0, 2), 16);
+                                        g = parseInt(hex.slice(2, 4), 16);
+                                        b = parseInt(hex.slice(4, 6), 16);
+                                        if (hex.length === 8) a = hex.slice(6, 8);
+                                    }
+                                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                                    const grayHex = gray.toString(16).padStart(2, '0');
+                                    return `#${grayHex}${grayHex}${grayHex}${a}`;
+                                }
+                                const namedColors = {
+                                    'red': '#111827', 'green': '#374151', 'blue': '#1f2937', 'yellow': '#4b5563',
+                                    'cyan': '#1f2937', 'magenta': '#4b5563', 'white': '#ffffff', 'black': '#000000',
+                                    'gray': '#808080', 'grey': '#808080', 'orange': '#4b5563', 'purple': '#374151',
+                                    'pink': '#9ca3af', 'brown': '#374151'
+                                };
+                                if (namedColors[lower]) {
+                                    return namedColors[lower];
+                                }
+                                return colorStr;
+                            };
+
                             let newVal = value;
 
 
@@ -64769,6 +64827,10 @@ function _runPreviewFrame(ctx, cvs) {
 
 
                                         else if (lowerVal === 'red' || lowerVal === '#ef4444' || lowerVal === '#ff073a') newVal = rc('red');
+
+                                        if (artStyle === 'sketch') {
+                                            newVal = toGrayscale(newVal);
+                                        }
 
 
 
@@ -127494,6 +127556,90 @@ async function removePublishTarget(targetIdx) {
 
 
 
+}
+
+
+async function showRenderLockError(message) {
+    const lockContainer = document.getElementById('renderLockContainer');
+    const lockMsg = document.getElementById('renderLockMsg');
+    const listEl = document.getElementById('activeRendersList');
+    
+    if (lockContainer && lockMsg) {
+        lockMsg.textContent = message || 'Có tiến trình render khác đang chạy trên hệ thống.';
+        lockContainer.classList.remove('hidden');
+        
+        // Hide the regular status bar
+        const statusEl = document.getElementById('renderStatus');
+        if (statusEl) statusEl.classList.add('hidden');
+        
+        // Enable buttons so they can try again after clearing
+        const btnRender = document.getElementById('btnRender');
+        const btnRenderDual = document.getElementById('btnRenderDual');
+        if (btnRender) btnRender.disabled = false;
+        if (btnRenderDual) btnRenderDual.disabled = false;
+        
+        // Fetch active renders
+        try {
+            const resp = await fetch(`${API}/active-renders`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.active_renders && data.active_renders.length > 0) {
+                    listEl.innerHTML = data.active_renders.map(r => {
+                        const dateStr = r.start_time ? new Date(r.start_time * 1000).toLocaleTimeString() : 'Không rõ';
+                        return `<div style="margin-bottom: 8px; border-bottom: 1px dashed var(--border); padding-bottom: 5px;">
+                            <strong>Job ID:</strong> ${r.job_id}<br>
+                            <strong>Dự án:</strong> ${r.project_title} (ID: ${r.project_id})<br>
+                            <strong>Bài học:</strong> ${r.lesson_title} (ID: ${r.lesson_id})<br>
+                            <strong>Trạng thái:</strong> ${r.message || 'Đang render'} (${r.progress}%) - Bắt đầu lúc: ${dateStr}
+                        </div>`;
+                    }).join('');
+                } else {
+                    listEl.innerHTML = '<em>Không tải được thông tin chi tiết tiến trình.</em>';
+                }
+            } else {
+                listEl.innerHTML = '<em>Không lấy được danh sách tiến trình.</em>';
+            }
+        } catch (e) {
+            console.error('Failed to fetch active renders:', e);
+            listEl.innerHTML = '<em>Không kết nối được server.</em>';
+        }
+    }
+}
+
+
+async function cancelAllActiveRenders() {
+    const btnCancel = document.getElementById('btnCancelActiveRenders');
+    if (btnCancel) {
+        btnCancel.disabled = true;
+        btnCancel.textContent = '⏳ Đang hủy tiến trình...';
+    }
+    
+    try {
+        const resp = await fetch(`${API}/cancel-renders`, { method: 'POST' });
+        const data = await resp.json();
+        
+        alert(data.message || 'Đã hủy toàn bộ tiến trình render thành công.');
+        
+        const lockContainer = document.getElementById('renderLockContainer');
+        if (lockContainer) lockContainer.classList.add('hidden');
+        
+        const btnRender = document.getElementById('btnRender');
+        const btnRenderDual = document.getElementById('btnRenderDual');
+        if (btnRender) btnRender.disabled = false;
+        if (btnRenderDual) btnRenderDual.disabled = false;
+        
+        const statusEl = document.getElementById('renderStatus');
+        if (statusEl) statusEl.classList.add('hidden');
+        
+    } catch (e) {
+        console.error('Failed to cancel active renders:', e);
+        alert('Có lỗi xảy ra khi hủy tiến trình: ' + e.message);
+    } finally {
+        if (btnCancel) {
+            btnCancel.disabled = false;
+            btnCancel.textContent = '🛑 Dừng & Clear Tiến Trình Render';
+        }
+    }
 }
 
 

@@ -18,6 +18,10 @@
 
 
 
+global.window = global;
+
+
+
 const fs = require('fs');
 
 
@@ -466,7 +470,7 @@ const STYLE_PALETTES = {
 
 
 
-        font: "'Architects Daughter', cursive",
+        font: "Pangolin",
 
 
 
@@ -5003,7 +5007,54 @@ function renderElementAtY(el, cursorY, stepProgress) {
 
                         set(target, prop, value) {
 
-
+                            const toGrayscale = (colorStr) => {
+                                if (typeof colorStr !== 'string') return colorStr;
+                                const trimmed = colorStr.trim();
+                                const lower = trimmed.toLowerCase();
+                                if (lower.startsWith('hsl')) {
+                                    return trimmed.replace(/hsl(a?)\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)%?\s*,/i, 'hsl$1($2, 0%,');
+                                }
+                                const rgbMatch = trimmed.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+                                if (rgbMatch) {
+                                    const r = parseInt(rgbMatch[1]);
+                                    const g = parseInt(rgbMatch[2]);
+                                    const b = parseInt(rgbMatch[3]);
+                                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                                    if (rgbMatch[4] !== undefined) {
+                                        return `rgba(${gray}, ${gray}, ${gray}, ${rgbMatch[4]})`;
+                                    } else {
+                                        return `rgb(${gray}, ${gray}, ${gray})`;
+                                    }
+                                }
+                                if (trimmed.startsWith('#')) {
+                                    const hex = trimmed.slice(1);
+                                    let r = 255, g = 255, b = 255, a = '';
+                                    if (hex.length === 3 || hex.length === 4) {
+                                        r = parseInt(hex[0] + hex[0], 16);
+                                        g = parseInt(hex[1] + hex[1], 16);
+                                        b = parseInt(hex[2] + hex[2], 16);
+                                        if (hex.length === 4) a = hex[3] + hex[3];
+                                    } else if (hex.length === 6 || hex.length === 8) {
+                                        r = parseInt(hex.slice(0, 2), 16);
+                                        g = parseInt(hex.slice(2, 4), 16);
+                                        b = parseInt(hex.slice(4, 6), 16);
+                                        if (hex.length === 8) a = hex.slice(6, 8);
+                                    }
+                                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                                    const grayHex = gray.toString(16).padStart(2, '0');
+                                    return `#${grayHex}${grayHex}${grayHex}${a}`;
+                                }
+                                const namedColors = {
+                                    'red': '#111827', 'green': '#374151', 'blue': '#1f2937', 'yellow': '#4b5563',
+                                    'cyan': '#1f2937', 'magenta': '#4b5563', 'white': '#ffffff', 'black': '#000000',
+                                    'gray': '#808080', 'grey': '#808080', 'orange': '#4b5563', 'purple': '#374151',
+                                    'pink': '#9ca3af', 'brown': '#374151'
+                                };
+                                if (namedColors[lower]) {
+                                    return namedColors[lower];
+                                }
+                                return colorStr;
+                            };
 
                             let newVal = value;
 
@@ -5238,7 +5289,9 @@ function renderElementAtY(el, cursorY, stepProgress) {
 
                                     else if (lowerVal === 'red' || lowerVal === '#ef4444' || lowerVal === '#ff073a') newVal = rc('red');
 
-
+                                    if (artStyle === 'sketch') {
+                                        newVal = toGrayscale(newVal);
+                                    }
 
                                 }
 
@@ -11234,7 +11287,15 @@ try { global.Image = require('canvas').Image; } catch(e) {}
 
 
 
-    process.stderr.write(`[Renderer v5] ${totalFrames} frames, ${FPS}fps, ${totalDur}s, mode=${MODE}\n`);
+    const startF = parseInt(args.startFrame || '0');
+
+
+
+    const endF = parseInt(args.endFrame || String(totalFrames));
+
+
+
+    process.stderr.write(`[Renderer v5] rendering range: ${startF} to ${endF} (total: ${totalFrames} frames), ${FPS}fps, ${totalDur}s, mode=${MODE}\n`);
 
 
 
@@ -11446,7 +11507,7 @@ try { global.Image = require('canvas').Image; } catch(e) {}
 
 
 
-        for (let f = 0; f < totalFrames; f++) {
+        for (let f = startF; f < endF; f++) {
 
 
 
@@ -11482,15 +11543,55 @@ try { global.Image = require('canvas').Image; } catch(e) {}
 
 
 
-            if (f % 30 === 0 || f === totalFrames - 1) {
+            if (f % 30 === 0 || f === endF - 1) {
 
 
 
-                const pct = Math.round((f / totalFrames) * 100);
+                const chunkTotal = endF - startF;
 
 
 
-                console.log(JSON.stringify({ type: 'progress', percent: pct, frame: f, total: totalFrames, message: `Pipe ${f}/${totalFrames} (${pct}%)` }));
+                const chunkCurrent = f - startF;
+
+
+
+                const pct = Math.round((chunkCurrent / chunkTotal) * 100);
+
+
+
+                console.log(JSON.stringify({
+
+
+
+                    type: 'progress',
+
+
+
+                    percent: pct,
+
+
+
+                    frame: f,
+
+
+
+                    startFrame: startF,
+
+
+
+                    endFrame: endF,
+
+
+
+                    total: totalFrames,
+
+
+
+                    message: `Pipe ${f}/${totalFrames} (${pct}%)`
+
+
+
+                }));
 
 
 
@@ -11542,7 +11643,7 @@ try { global.Image = require('canvas').Image; } catch(e) {}
 
 
 
-        for (let f = 0; f < totalFrames; f++) {
+        for (let f = startF; f < endF; f++) {
 
 
 
@@ -11562,15 +11663,31 @@ try { global.Image = require('canvas').Image; } catch(e) {}
 
 
 
-            if (f % 30 === 0 || f === totalFrames - 1) {
+            if (f % 30 === 0 || f === endF - 1) {
 
 
 
-                const pct = Math.round((f / totalFrames) * 100);
+                const chunkTotal = endF - startF;
 
 
 
-                console.log(JSON.stringify({ type: 'progress', percent: pct, frame: f, total: totalFrames, message: `Frame ${f}/${totalFrames} (${pct}%)` }));
+                const chunkCurrent = f - startF;
+
+
+
+                const pct = Math.round((chunkCurrent / chunkTotal) * 100);
+
+
+
+                console.log(JSON.stringify({
+                    type: 'progress',
+                    percent: pct,
+                    frame: f,
+                    startFrame: startF,
+                    endFrame: endF,
+                    total: totalFrames,
+                    message: `Frame ${f}/${totalFrames} (${pct}%)`
+                }));
 
 
 

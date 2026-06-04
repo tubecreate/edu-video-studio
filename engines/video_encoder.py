@@ -17,7 +17,7 @@ CANVAS_RENDERER_JS = Path(__file__).parent / "canvas_renderer.js"
 # Encoder presets for ffmpeg
 ENCODER_MAP = {
     "cpu":   {"codec": "libx264",    "preset": "fast",     "extra": ["-crf", "22", "-threads", "0"]},
-    "nvenc": {"codec": "h264_nvenc", "preset": "p1",       "extra": ["-rc", "vbr", "-cq", "23", "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]},
+    "nvenc": {"codec": "h264_nvenc", "preset": "p4",       "extra": ["-rc", "vbr", "-cq", "23", "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]},
     "qsv":   {"codec": "h264_qsv",  "preset": "veryfast", "extra": ["-global_quality", "23", "-look_ahead", "0"]},
     "amf":   {"codec": "h264_amf",  "preset": "speed",    "extra": ["-rc", "cqp", "-qp_i", "22", "-qp_p", "22", "-usage", "transcoding"]},
 }
@@ -192,6 +192,12 @@ async def render_and_encode(
     env = os.environ.copy()
     env["NODE_PATH"] = str(node_modules)
 
+    # Prepend working ffmpeg directory to PATH so subprocesses spawned by node find the correct ffmpeg
+    ffmpeg_exe = _find_executable("ffmpeg")
+    ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+    if ffmpeg_dir:
+        env["PATH"] = ffmpeg_dir + os.pathsep + env.get("PATH", "")
+
     # 1. Render primary slide content video
     if render_mode == "pipe":
         await _render_pipe(
@@ -296,48 +302,244 @@ async def _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, pct
 
 async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
                        theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
-    """PIPE MODE: render + encode in single step (fast)."""
+    """PIPE MODE: render + encode in single step (fast). Uses multi-process chunk rendering."""
+    import math
     enc = ENCODER_MAP.get(gpu_encoder, ENCODER_MAP["nvenc"])
-    cmd = [
-        node_exe, str(CANVAS_RENDERER_JS),
-        "--script", script_path,
-        "--timing", timing_path,
-        "--output", output_dir,
-        "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
-        "--style", art_style,
-        "--fps", "30",
-        "--mode", "pipe",
-        "--outputFile", final_video,
-        "--codec", enc["codec"],
-        "--preset", enc["preset"],
-    ]
-    if enc.get("extra"):
-        cmd.extend(["--ffmpegExtra", " ".join(enc["extra"])])
-    if os.path.isfile(audio_path):
-        cmd.extend(["--audio", audio_path])
-
     encoder_label = {"cpu": "CPU", "nvenc": "NVIDIA GPU", "qsv": "Intel QSV", "amf": "AMD AMF"}.get(gpu_encoder, gpu_encoder)
-    logger.info(f"[Pipe] Rendering → {final_video} (encoder: {encoder_label})")
-    if progress_callback:
-        progress_callback(8, f"⚡ Pipe + {encoder_label}: rendering...")
 
+    # 1. Determine total duration and total frames
+    total_duration = 30.0
     try:
-        await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (8, 96))
-    except RuntimeError as e:
-        # Pipe mode failed (GPU encoder unavailable) — fallback to frames + CPU
-        logger.warning(f"[Pipe] Failed ({e}), falling back to frames + CPU encoder...")
+        with open(timing_path, "r", encoding="utf-8-sig") as f:
+            timing_data = json.load(f)
+            total_duration = timing_data.get("total_duration", 30.0)
+    except Exception as e:
+        logger.warning(f"[Pipe] Could not read timing map to determine duration: {e}")
+
+    total_frames = math.ceil(total_duration * 30)
+
+    # 2. Determine worker count based on CPU cores
+    cpu_count = os.cpu_count() or 4
+    num_workers = max(1, min(cpu_count - 1, 4)) # Cap at 4 workers to prevent NVENC session limits
+
+    # Fallback to single worker if total duration is extremely short (under 5 seconds)
+    if total_frames < 150:
+        num_workers = 1
+
+    logger.info(f"[Pipe] Rendering → {final_video} (encoder: {encoder_label}, workers: {num_workers}, frames: {total_frames})")
+
+    if num_workers == 1:
+        # Single process fallback
+        cmd = [
+            node_exe, str(CANVAS_RENDERER_JS),
+            "--script", script_path,
+            "--timing", timing_path,
+            "--output", output_dir,
+            "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+            "--style", art_style,
+            "--fps", "30",
+            "--mode", "pipe",
+            "--outputFile", final_video,
+            "--codec", enc["codec"],
+            "--preset", enc["preset"],
+        ]
+        if enc.get("extra"):
+            cmd.extend(["--ffmpegExtra", " ".join(enc["extra"])])
+        if os.path.isfile(audio_path):
+            cmd.extend(["--audio", audio_path])
+
         if progress_callback:
-            progress_callback(10, "⚠️ Pipe failed, switching to CPU frames mode...")
-        return await _render_frames(
-            node_exe, ext_dir, script_path, timing_path, output_dir,
-            theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
+            progress_callback(8, f"⚡ Pipe + {encoder_label}: rendering...")
+
+        try:
+            await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (8, 96))
+        except RuntimeError as e:
+            logger.warning(f"[Pipe] Failed ({e}), falling back to frames + CPU encoder...")
+            if progress_callback:
+                progress_callback(10, "⚠️ Pipe failed, switching to CPU frames mode...")
+            return await _render_frames(
+                node_exe, ext_dir, script_path, timing_path, output_dir,
+                theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
+            )
+    else:
+        # Multi-process parallel rendering
+        temp_dir = os.path.join(output_dir, f"temp_chunks_{os.path.basename(final_video)}")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        chunk_size = total_frames // num_workers
+        workers_ranges = []
+        for w in range(num_workers):
+            start = w * chunk_size
+            end = total_frames if w == num_workers - 1 else (w + 1) * chunk_size
+            workers_ranges.append((start, end))
+
+        procs = []
+        for w, (start, end) in enumerate(workers_ranges):
+            chunk_path = os.path.join(temp_dir, f"chunk_{w}.mp4")
+            cmd_w = [
+                node_exe, str(CANVAS_RENDERER_JS),
+                "--script", script_path,
+                "--timing", timing_path,
+                "--output", output_dir,
+                "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+                "--style", art_style,
+                "--fps", "30",
+                "--mode", "pipe",
+                "--outputFile", chunk_path,
+                "--codec", enc["codec"],
+                "--preset", enc["preset"],
+                "--startFrame", str(start),
+                "--endFrame", str(end)
+            ]
+            if enc.get("extra"):
+                cmd_w.extend(["--ffmpegExtra", " ".join(enc["extra"])])
+            # Note: We do NOT pass --audio to workers to avoid audio sync issues in chunked videos
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_w,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(ext_dir),
+                env=env,
+            )
+            procs.append(proc)
+
+        worker_progress = [0] * num_workers
+
+        async def monitor_worker(w_idx, proc):
+            stderr_lines = []
+            async def read_stderr():
+                try:
+                    while True:
+                        line = await proc.stderr.readline()
+                        if not line:
+                            break
+                        stderr_lines.append(line)
+                except Exception:
+                    pass
+
+            stderr_task = asyncio.create_task(read_stderr())
+
+            try:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.decode("utf-8", errors="replace").strip()
+                    if line_str.startswith("{"):
+                        try:
+                            msg = json.loads(line_str)
+                            if msg.get("type") == "progress":
+                                f = msg.get("frame", 0)
+                                start = msg.get("startFrame", 0)
+                                worker_progress[w_idx] = max(0, f - start)
+
+                                # Aggregate progress
+                                total_done = sum(worker_progress)
+                                pct = int((total_done / total_frames) * 100)
+                                mapped_pct = int(8 + (pct / 100.0) * (96 - 8))
+                                if progress_callback:
+                                    progress_callback(mapped_pct, f"⚡ Pipe + {encoder_label}: rendering... {pct}% ({total_done}/{total_frames} frames)")
+                        except json.JSONDecodeError:
+                            pass
+            finally:
+                await proc.wait()
+                await stderr_task
+                stderr_content = b"".join(stderr_lines).decode("utf-8", errors="replace")
+                if proc.returncode != 0:
+                    error_lines = [l for l in stderr_content.split('\n') if l.strip() and not l.strip().startswith('[Renderer]')]
+                    error_msg = '\n'.join(error_lines[-10:]) if error_lines else stderr_content[-1000:]
+                    raise RuntimeError(f"Worker {w_idx} failed (exit code {proc.returncode}): {error_msg}")
+
+        tasks = [monitor_worker(i, procs[i]) for i in range(num_workers)]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.error(f"[Pipe] Parallel rendering error: {e}")
+            for p in procs:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+            # Cleanup temp directory on error
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            # Fallback to frames CPU mode
+            logger.warning("[Pipe] Parallel render failed, falling back to frames + CPU...")
+            if progress_callback:
+                progress_callback(10, "⚠️ Parallel render failed, switching to CPU frames mode...")
+            return await _render_frames(
+                node_exe, ext_dir, script_path, timing_path, output_dir,
+                theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
+            )
+
+        # 3. Concatenate video chunks using FFmpeg demuxer
+        if progress_callback:
+            progress_callback(96, "🎬 Ghép các phân đoạn video...")
+
+        concat_list_path = os.path.join(temp_dir, "concat_list.txt")
+        with open(concat_list_path, "w", encoding="utf-8") as f_list:
+            for w in range(num_workers):
+                chunk_file = os.path.join(temp_dir, f"chunk_{w}.mp4").replace("\\", "/")
+                f_list.write(f"file '{chunk_file}'\n")
+
+        raw_video = os.path.join(temp_dir, "raw_video.mp4")
+        ffmpeg_exe = _find_executable("ffmpeg")
+        concat_cmd = [
+            ffmpeg_exe, "-y", "-f", "concat", "-safe", "0",
+            "-i", concat_list_path, "-c", "copy", raw_video
+        ]
+
+        logger.info(f"[Pipe] Stitching chunks: {' '.join(concat_cmd)}")
+        proc_concat = await asyncio.create_subprocess_exec(
+            *concat_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
+        _, stderr_concat = await proc_concat.communicate()
+        if proc_concat.returncode != 0:
+            logger.error(f"[Pipe] FFmpeg concat failed: {stderr_concat.decode()[:500]}")
+            # Try to copy first chunk or fallback
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            raise RuntimeError(f"FFmpeg chunk concat failed: {stderr_concat.decode()[:300]}")
+
+        # 4. Mux Audio with raw video
+        if os.path.isfile(audio_path):
+            if progress_callback:
+                progress_callback(98, "🔊 Ghép âm thanh...")
+            cmd_mux = [
+                ffmpeg_exe, "-y",
+                "-i", raw_video,
+                "-i", audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                final_video
+            ]
+            logger.info(f"[Pipe] Muxing audio: {' '.join(cmd_mux)}")
+            proc_mux = await asyncio.create_subprocess_exec(
+                *cmd_mux, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr_mux = await proc_mux.communicate()
+            if proc_mux.returncode != 0:
+                logger.warning(f"[Pipe] Mux failed, using raw: {stderr_mux.decode()[:200]}")
+                shutil.copy2(raw_video, final_video)
+        else:
+            shutil.copy2(raw_video, final_video)
+
+        # 5. Cleanup temp chunk files
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"[Pipe] Cleanup chunks error: {e}")
 
     if not os.path.isfile(final_video):
-        # Pipe produced no output — fallback to frames
-        logger.warning("[Pipe] No output file, falling back to frames + CPU...")
+        logger.warning("[Pipe] No output file produced, falling back to frames + CPU...")
         if progress_callback:
-            progress_callback(10, "⚠️ No output, switching to CPU frames mode...")
+            progress_callback(10, "⚠️ Không tìm thấy file kết quả, chuyển sang CPU frames mode...")
         return await _render_frames(
             node_exe, ext_dir, script_path, timing_path, output_dir,
             theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, "cpu",
@@ -353,32 +555,144 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
 
 async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir,
                           theme, bg_color, aspect_ratio, art_style, audio_path, final_video, env, progress_callback, gpu_encoder="nvenc"):
-    """FRAMES MODE: render PNGs then FFmpeg encode (stable)."""
+    """FRAMES MODE: render JPEGs then FFmpeg encode (stable). Uses multi-process parallel rendering."""
+    import math
     frames_dir = os.path.join(os.path.dirname(script_path), "frames")
     os.makedirs(frames_dir, exist_ok=True)
 
     # Clean old frames
     for f in os.listdir(frames_dir):
-        if f.endswith(".png"):
-            os.remove(os.path.join(frames_dir, f))
+        if f.endswith(".png") or f.endswith(".jpg"):
+            try:
+                os.remove(os.path.join(frames_dir, f))
+            except Exception:
+                pass
 
-    # Step 1: Render frames
-    cmd = [
-        node_exe, str(CANVAS_RENDERER_JS),
-        "--script", script_path,
-        "--timing", timing_path,
-        "--output", frames_dir,
-        "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
-        "--style", art_style,
-        "--fps", "30",
-        "--mode", "frames",
-    ]
+    # 1. Determine total duration and total frames
+    total_duration = 30.0
+    try:
+        with open(timing_path, "r", encoding="utf-8-sig") as f:
+            timing_data = json.load(f)
+            total_duration = timing_data.get("total_duration", 30.0)
+    except Exception as e:
+        logger.warning(f"[Frames] Could not read timing map: {e}")
 
-    logger.info(f"[Frames] Rendering PNGs...")
-    if progress_callback:
-        progress_callback(5, "🖼️ Rendering frames...")
+    total_frames = math.ceil(total_duration * 30)
 
-    await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (5, 65))
+    # 2. Determine worker count based on CPU cores
+    cpu_count = os.cpu_count() or 4
+    num_workers = max(1, min(cpu_count - 1, 4))
+
+    # Fallback to single worker if extremely short
+    if total_frames < 150:
+        num_workers = 1
+
+    logger.info(f"[Frames] Rendering PNG/JPEGs (workers: {num_workers}, total frames: {total_frames})")
+
+    # Step 1: Render frames (Single or Parallel)
+    if num_workers == 1:
+        cmd = [
+            node_exe, str(CANVAS_RENDERER_JS),
+            "--script", script_path,
+            "--timing", timing_path,
+            "--output", frames_dir,
+            "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+            "--style", art_style,
+            "--fps", "30",
+            "--mode", "frames",
+        ]
+        if progress_callback:
+            progress_callback(5, "🖼️ Rendering frames...")
+        await _run_node_renderer(node_exe, ext_dir, cmd, env, progress_callback, (5, 65))
+    else:
+        chunk_size = total_frames // num_workers
+        workers_ranges = []
+        for w in range(num_workers):
+            start = w * chunk_size
+            end = total_frames if w == num_workers - 1 else (w + 1) * chunk_size
+            workers_ranges.append((start, end))
+
+        procs = []
+        for w, (start, end) in enumerate(workers_ranges):
+            cmd_w = [
+                node_exe, str(CANVAS_RENDERER_JS),
+                "--script", script_path,
+                "--timing", timing_path,
+                "--output", frames_dir,
+                "--theme", theme, "--bg-color", bg_color, "--aspect", aspect_ratio,
+                "--style", art_style,
+                "--fps", "30",
+                "--mode", "frames",
+                "--startFrame", str(start),
+                "--endFrame", str(end)
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_w,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(ext_dir),
+                env=env,
+            )
+            procs.append(proc)
+
+        worker_progress = [0] * num_workers
+
+        async def monitor_worker(w_idx, proc):
+            stderr_lines = []
+            async def read_stderr():
+                try:
+                    while True:
+                        line = await proc.stderr.readline()
+                        if not line:
+                            break
+                        stderr_lines.append(line)
+                except Exception:
+                    pass
+
+            stderr_task = asyncio.create_task(read_stderr())
+
+            try:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.decode("utf-8", errors="replace").strip()
+                    if line_str.startswith("{"):
+                        try:
+                            msg = json.loads(line_str)
+                            if msg.get("type") == "progress":
+                                f = msg.get("frame", 0)
+                                start = msg.get("startFrame", 0)
+                                worker_progress[w_idx] = max(0, f - start)
+
+                                # Aggregate progress
+                                total_done = sum(worker_progress)
+                                pct = int((total_done / total_frames) * 100)
+                                mapped_pct = int(5 + (pct / 100.0) * (65 - 5))
+                                if progress_callback:
+                                    progress_callback(mapped_pct, f"🖼️ Rendering frames... {pct}% ({total_done}/{total_frames})")
+                        except json.JSONDecodeError:
+                            pass
+            finally:
+                await proc.wait()
+                await stderr_task
+                stderr_content = b"".join(stderr_lines).decode("utf-8", errors="replace")
+                if proc.returncode != 0:
+                    error_lines = [l for l in stderr_content.split('\n') if l.strip() and not l.strip().startswith('[Renderer]')]
+                    error_msg = '\n'.join(error_lines[-10:]) if error_lines else stderr_content[-1000:]
+                    raise RuntimeError(f"Worker {w_idx} failed (exit code {proc.returncode}): {error_msg}")
+
+        tasks = [monitor_worker(i, procs[i]) for i in range(num_workers)]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.error(f"[Frames] Parallel rendering error: {e}")
+            for p in procs:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+            raise e
 
     frame_count = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
     if frame_count == 0:
@@ -462,6 +776,14 @@ async def _render_frames(node_exe, ext_dir, script_path, timing_path, output_dir
         os.remove(raw_video)
     except Exception:
         pass
+
+    # Clean up intermediate JPEG/PNG frames to save disk space
+    try:
+        for f in os.listdir(frames_dir):
+            if f.endswith(".png") or f.endswith(".jpg"):
+                os.remove(os.path.join(frames_dir, f))
+    except Exception as e:
+        logger.warning(f"[Frames] Failed to clean up frames directory: {e}")
 
     if progress_callback:
         progress_callback(100, "Video export complete!")

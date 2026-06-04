@@ -2198,18 +2198,36 @@ async def render_video(request: Request):
     if not project_id or not lesson_id:
         raise HTTPException(400, "project_id and lesson_id required")
 
+    lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
+
+    # Load project and lesson titles for metadata and status description
+    proj_dir = os.path.join(_projects_dir(), project_id)
+    project_title = "Unknown Project"
+    proj_meta_path = os.path.join(proj_dir, "project.json")
+    if os.path.isfile(proj_meta_path):
+        proj = _read_json(proj_meta_path)
+        project_title = proj.get("title", project_title)
+
+    lesson_meta_path = os.path.join(lesson_dir, "lesson.json")
+    lesson_meta = _read_json(lesson_meta_path, {})
+    lesson_title = lesson_meta.get("title", "Unknown Lesson")
+
     # Check for active running render jobs to avoid NVENC limit crashes
     active_renders = [
         jid for jid, job in _jobs.items()
         if jid.startswith("render_") and job.get("status") == "running"
     ]
     if active_renders:
+        details = []
+        for jid in active_renders:
+            job = _jobs[jid]
+            details.append(f"- Job {jid}: Dự án '{job.get('project_title')}', Bài '{job.get('lesson_title')}' (Tiến trình: {job.get('progress')}% - {job.get('message')})")
+        details_str = "\n".join(details)
         raise HTTPException(
             400,
-            "Có tiến trình render khác đang chạy trên hệ thống. Vui lòng đợi tiến trình trước hoàn tất để tránh lỗi GPU."
+            f"Có tiến trình render khác đang chạy trên hệ thống:\n{details_str}\nVui lòng đợi tiến trình trước hoàn tất để tránh lỗi GPU."
         )
 
-    lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
     script_path = os.path.join(lesson_dir, "lesson_script.json")
     timing_path = os.path.join(lesson_dir, "timing_map.json")
 
@@ -2229,8 +2247,6 @@ async def render_video(request: Request):
         logger.error(f"Failed to validate/expand script on render: {e}")
 
     # Resolve Intro & Outro custom template video paths if configured
-    lesson_meta_path = os.path.join(lesson_dir, "lesson.json")
-    lesson_meta = _read_json(lesson_meta_path, {})
     intro_template = lesson_meta.get("intro_template", "none")
     outro_template = lesson_meta.get("outro_template", "none")
     
@@ -2259,7 +2275,16 @@ async def render_video(request: Request):
                     outro_video_path = path_cand
 
     job_id = f"render_{lesson_id}_{uuid.uuid4().hex[:6]}"
-    _jobs[job_id] = {"status": "running", "progress": 0, "message": "Starting render..."}
+    _jobs[job_id] = {
+        "status": "running",
+        "progress": 0,
+        "message": "Starting render...",
+        "project_id": project_id,
+        "lesson_id": lesson_id,
+        "project_title": project_title,
+        "lesson_title": lesson_title,
+        "start_time": time.time()
+    }
 
     async def _run():
         try:
@@ -2289,6 +2314,58 @@ async def render_video(request: Request):
 
     asyncio.create_task(_run())
     return {"status": "started", "job_id": job_id}
+
+
+@router.get("/active-renders")
+async def get_active_renders():
+    """Get details of all currently running render jobs."""
+    active = []
+    for jid, job in _jobs.items():
+        if jid.startswith("render_") and job.get("status") == "running":
+            active.append({
+                "job_id": jid,
+                "project_id": job.get("project_id"),
+                "lesson_id": job.get("lesson_id"),
+                "project_title": job.get("project_title", "Không rõ"),
+                "lesson_title": job.get("lesson_title", "Không rõ"),
+                "progress": job.get("progress", 0),
+                "message": job.get("message", ""),
+                "start_time": job.get("start_time", 0)
+            })
+    return {"active_renders": active}
+
+
+@router.post("/cancel-renders")
+async def cancel_renders():
+    """Cancel all active render jobs and terminate their OS subprocesses."""
+    cancelled_count = 0
+    for jid, job in _jobs.items():
+        if jid.startswith("render_") and job.get("status") == "running":
+            job.update({
+                "status": "error",
+                "message": "Tiến trình bị hủy bởi người dùng."
+            })
+            cancelled_count += 1
+            
+    import subprocess
+    
+    # Kill canvas_renderer.js node processes safely on Windows
+    try:
+        ps_cmd = "Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -like '*canvas_renderer.js*'} | ForEach-Object { Stop-Process $_.ProcessId -Force }"
+        subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True)
+    except Exception as e:
+        logger.error(f"Failed to kill canvas_renderer processes: {e}")
+        
+    # Kill ffmpeg
+    try:
+        subprocess.run(["taskkill", "/f", "/im", "ffmpeg.exe"], capture_output=True, text=True)
+    except Exception as e:
+        logger.error(f"Failed to kill ffmpeg processes: {e}")
+        
+    return {
+        "status": "success",
+        "message": f"Đã dừng {cancelled_count} tiến trình render đang chạy và giải phóng GPU."
+    }
 
 
 # ── Job Status ───────────────────────────────────────────────────
