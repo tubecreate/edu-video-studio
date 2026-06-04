@@ -897,160 +897,165 @@ async def analyze_input_stream(
     image: Optional[UploadFile] = File(None),
 ):
     """Streaming version of /analyze — returns SSE events."""
-    project_id = None
-    lesson_id = None
-    text_input = ""
-    image_bytes = None
-    subject = "general"
-
-    content_type = request.headers.get("content-type", "")
-    image_bytes_list = []
-    if "multipart" in content_type:
-        form = await request.form()
-        project_id = form.get("project_id", "")
-        lesson_id = form.get("lesson_id", "")
-        text_input = form.get("text", "")
-        subject = form.get("subject", "general")
-        lang = form.get("lang", "vi")
-        ai_settings_str = form.get("ai_settings", "{}")
-        illustration_mode = form.get("illustration_mode", "canvas")
-        chatgpt_profile = form.get("chatgpt_profile", "youtube6")
-        skip_auto_pilot = form.get("skip_auto_pilot", "false") == "true"
-        size = form.get("size", "1:1")
-        theme = form.get("theme", "dark")
-        bg_color = form.get("bg_color", "")
-        audience = form.get("audience", "children")
-        skill_id = form.get("skill_id", "")
-        
-        for key, value in form.items():
-            if key.startswith("image") and hasattr(value, "read"):
-                image_bytes_list.append(await value.read())
-                
-        if image_bytes_list:
-            image_bytes = image_bytes_list[0]
-            if len(image_bytes_list) == 1:
-                image_bytes_list = None
-    else:
-        body = await request.json()
-        project_id = body.get("project_id", "")
-        lesson_id = body.get("lesson_id", "")
-        text_input = body.get("text", "")
-        subject = body.get("subject", "general")
-        lang = body.get("lang", "vi")
-        ai_settings_str = body.get("ai_settings", "{}")
-        illustration_mode = body.get("illustration_mode", "canvas")
-        chatgpt_profile = body.get("chatgpt_profile", "youtube6")
-        skip_auto_pilot = body.get("skip_auto_pilot", False)
-        size = body.get("size", "1:1")
-        theme = body.get("theme", "dark")
-        bg_color = body.get("bg_color", "")
-        audience = body.get("audience", "children")
-        skill_id = body.get("skill_id", "")
-
-    # Load skill: prefer explicit skill_id, fallback to project setting
-    if not skill_id and project_id:
-        try:
-            proj_meta = _read_json(os.path.join(_projects_dir(), project_id, "project.json"))
-            skill_id = proj_meta.get("skill_id", "general")
-        except Exception:
-            skill_id = "general"
-    skill_data = None
-    if skill_id:
-        try:
-            skill_data = _get_skill(skill_id)
-        except Exception:
-            skill_data = None
-
     try:
-        ai_settings = json.loads(ai_settings_str) if isinstance(ai_settings_str, str) else ai_settings_str
-    except Exception:
-        ai_settings = {}
+        project_id = None
+        lesson_id = None
+        text_input = ""
+        image_bytes = None
+        subject = "general"
 
-    if not text_input and not image_bytes:
-        raise HTTPException(400, "Provide either text or image input")
+        content_type = request.headers.get("content-type", "")
+        image_bytes_list = []
+        if "multipart" in content_type:
+            form = await request.form()
+            project_id = form.get("project_id", "")
+            lesson_id = form.get("lesson_id", "")
+            text_input = form.get("text", "")
+            subject = form.get("subject", "general")
+            lang = form.get("lang", "vi")
+            ai_settings_str = form.get("ai_settings", "{}")
+            illustration_mode = form.get("illustration_mode", "canvas")
+            chatgpt_profile = form.get("chatgpt_profile", "youtube6")
+            skip_auto_pilot = form.get("skip_auto_pilot", "false") == "true"
+            size = form.get("size", "1:1")
+            theme = form.get("theme", "dark")
+            bg_color = form.get("bg_color", "")
+            audience = form.get("audience", "children")
+            skill_id = form.get("skill_id", "")
+            
+            for key, value in form.items():
+                if key.startswith("image") and hasattr(value, "read"):
+                    image_bytes_list.append(await value.read())
+                    
+            if image_bytes_list:
+                image_bytes = image_bytes_list[0]
+                if len(image_bytes_list) == 1:
+                    image_bytes_list = None
+        else:
+            body = await request.json()
+            project_id = body.get("project_id", "")
+            lesson_id = body.get("lesson_id", "")
+            text_input = body.get("text", "")
+            subject = body.get("subject", "general")
+            lang = body.get("lang", "vi")
+            ai_settings_str = body.get("ai_settings", "{}")
+            illustration_mode = body.get("illustration_mode", "canvas")
+            chatgpt_profile = body.get("chatgpt_profile", "youtube6")
+            skip_auto_pilot = body.get("skip_auto_pilot", False)
+            size = body.get("size", "1:1")
+            theme = body.get("theme", "dark")
+            bg_color = body.get("bg_color", "")
+            audience = body.get("audience", "children")
+            skill_id = body.get("skill_id", "")
 
-    script_gen = _load_engine("script_generator")
-    gen_stream = script_gen.generate_lesson_script_stream
+        # Load skill: prefer explicit skill_id, fallback to project setting
+        if not skill_id and project_id:
+            try:
+                proj_meta = _read_json(os.path.join(_projects_dir(), project_id, "project.json"))
+                skill_id = proj_meta.get("skill_id", "general")
+            except Exception:
+                skill_id = "general"
+        skill_data = None
+        if skill_id:
+            try:
+                skill_data = _get_skill(skill_id)
+            except Exception:
+                skill_data = None
 
-    async def event_generator():
-        final_script = None
-        raw_vision_text = []
-        raw_script_text = []
-        current_stage = 1
         try:
-            async for event in gen_stream(
-                text=text_input,
-                image_bytes=image_bytes,
-                image_bytes_list=image_bytes_list,
-                subject=subject,
-                lang=lang,
-                ai_settings=ai_settings,
-                illustration_mode=illustration_mode,
-                theme=theme,
-                bg_color=bg_color,
-                audience=audience,
-                aspect_ratio=size,
-                skill=skill_data,
-            ):
-                event_type = event.get("type", "")
-                
-                # Track raw text by stage
-                if event_type == "chunk":
-                    if current_stage == 1:
-                        raw_vision_text.append(event.get("text", ""))
-                    else:
-                        raw_script_text.append(event.get("text", ""))
-                elif event_type == "status":
-                    status_text = event.get("text", "")
-                    if "Giai đoạn 2" in status_text or "Viết kịch bản" in status_text:
-                        current_stage = 2
-                
-                if event_type == "done":
-                    final_script = event.get("script")
-                    # Save to lesson
-                    if project_id and lesson_id and final_script:
-                        lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
-                        if os.path.isdir(lesson_dir):
-                            _write_json(os.path.join(lesson_dir, "lesson_script.json"), final_script)
-                            # Save per-lesson raw data
-                            _write_text(os.path.join(lesson_dir, "raw_vision.txt"), "".join(raw_vision_text))
-                            _write_text(os.path.join(lesson_dir, "raw_script.txt"), "".join(raw_script_text))
-                            if image_bytes:
-                                img_path = os.path.join(lesson_dir, "input_image.jpg")
-                                # Also save as raw_vision.jpg for ChatGPT reference
-                                raw_vision_path = os.path.join(lesson_dir, "raw_vision.jpg")
-                                with open(img_path, "wb") as f:
-                                    f.write(image_bytes)
-                                with open(raw_vision_path, "wb") as f:
-                                    f.write(image_bytes)
-                            
-                            # Auto-pilot: trigger image generation if mode=chatgpt AND
-                            # frontend is NOT running inline autopilot (skip_auto_pilot=True)
-                            if illustration_mode == "chatgpt" and final_script and not skip_auto_pilot:
-                                ap_job_id = f"autopilot_{lesson_id}_{uuid.uuid4().hex[:6]}"
-                                _jobs[ap_job_id] = {"status": "running", "progress": 0, "message": "AutoPilot: Starting ChatGPT image generation..."}
-                                asyncio.create_task(_run_chatgpt_autopilot(
-                                    final_script, lesson_dir, chatgpt_profile, project_id, lesson_id, ap_job_id, size
-                                ))
-                                event["auto_pilot"] = True
-                                event["autopilot_job_id"] = ap_job_id
-                            elif illustration_mode == "chatgpt" and skip_auto_pilot:
-                                logger.info("[AutoPilot] Skipped — frontend inline autopilot will handle image generation")
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.error(f"Stream analyze error: {e}")
-            traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'text': str(e)[:300]}, ensure_ascii=False)}\n\n"
+            ai_settings = json.loads(ai_settings_str) if isinstance(ai_settings_str, str) else ai_settings_str
+        except Exception:
+            ai_settings = {}
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+        if not text_input and not image_bytes:
+            raise HTTPException(400, "Provide either text or image input")
+
+        script_gen = _load_engine("script_generator")
+        gen_stream = script_gen.generate_lesson_script_stream
+
+        async def event_generator():
+            final_script = None
+            raw_vision_text = []
+            raw_script_text = []
+            current_stage = 1
+            try:
+                async for event in gen_stream(
+                    text=text_input,
+                    image_bytes=image_bytes,
+                    image_bytes_list=image_bytes_list,
+                    subject=subject,
+                    lang=lang,
+                    ai_settings=ai_settings,
+                    illustration_mode=illustration_mode,
+                    theme=theme,
+                    bg_color=bg_color,
+                    audience=audience,
+                    aspect_ratio=size,
+                    skill=skill_data,
+                ):
+                    event_type = event.get("type", "")
+                    
+                    # Track raw text by stage
+                    if event_type == "chunk":
+                        if current_stage == 1:
+                            raw_vision_text.append(event.get("text", ""))
+                        else:
+                            raw_script_text.append(event.get("text", ""))
+                    elif event_type == "status":
+                        status_text = event.get("text", "")
+                        if "Giai đoạn 2" in status_text or "Viết kịch bản" in status_text:
+                            current_stage = 2
+                    
+                    if event_type == "done":
+                        final_script = event.get("script")
+                        # Save to lesson
+                        if project_id and lesson_id and final_script:
+                            lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
+                            if os.path.isdir(lesson_dir):
+                                _write_json(os.path.join(lesson_dir, "lesson_script.json"), final_script)
+                                # Save per-lesson raw data
+                                _write_text(os.path.join(lesson_dir, "raw_vision.txt"), "".join(raw_vision_text))
+                                _write_text(os.path.join(lesson_dir, "raw_script.txt"), "".join(raw_script_text))
+                                if image_bytes:
+                                    img_path = os.path.join(lesson_dir, "input_image.jpg")
+                                    # Also save as raw_vision.jpg for ChatGPT reference
+                                    raw_vision_path = os.path.join(lesson_dir, "raw_vision.jpg")
+                                    with open(img_path, "wb") as f:
+                                        f.write(image_bytes)
+                                    with open(raw_vision_path, "wb") as f:
+                                        f.write(image_bytes)
+                                
+                                # Auto-pilot: trigger image generation if mode=chatgpt AND
+                                # frontend is NOT running inline autopilot (skip_auto_pilot=True)
+                                if illustration_mode == "chatgpt" and final_script and not skip_auto_pilot:
+                                    ap_job_id = f"autopilot_{lesson_id}_{uuid.uuid4().hex[:6]}"
+                                    _jobs[ap_job_id] = {"status": "running", "progress": 0, "message": "AutoPilot: Starting ChatGPT image generation..."}
+                                    asyncio.create_task(_run_chatgpt_autopilot(
+                                        final_script, lesson_dir, chatgpt_profile, project_id, lesson_id, ap_job_id, size
+                                    ))
+                                    event["auto_pilot"] = True
+                                    event["autopilot_job_id"] = ap_job_id
+                                elif illustration_mode == "chatgpt" and skip_auto_pilot:
+                                    logger.info("[AutoPilot] Skipped — frontend inline autopilot will handle image generation")
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                logger.error(f"Stream analyze error: {e}")
+                traceback.print_exc()
+                yield f"data: {json.dumps({'type': 'error', 'text': str(e)[:300]}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Analyze stream outer error: {e}")
+        traceback.print_exc()
+        raise HTTPException(500, f"Analysis stream setup failed: {str(e)}")
 
 
 async def _run_chatgpt_autopilot(script: dict, lesson_dir: str, profile: str, project_id: str, lesson_id: str, ap_job_id: str = None, size: str = "1:1"):
