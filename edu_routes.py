@@ -31,10 +31,32 @@ _ENGINES_DIR = os.path.join(_EXT_DIR, "engines")
 def _load_engine(module_name: str):
     """Load an engine module by name from the engines/ directory."""
     module_file = os.path.join(_ENGINES_DIR, f"{module_name}.py")
+
+    # Fallback: if engines/ doesn't exist next to __file__, try to find the
+    # actual extension directory via extension_manager (handles cases where
+    # the folder is named differently on the target machine, e.g. 'eduvideo_studio')
+    if not os.path.isfile(module_file):
+        try:
+            from tubecli.core.extension_manager import extension_manager
+            ext = extension_manager.get("edu_video_studio")
+            if ext and ext.extension_dir:
+                alt_file = os.path.join(ext.extension_dir, "engines", f"{module_name}.py")
+                if os.path.isfile(alt_file):
+                    module_file = alt_file
+        except Exception:
+            pass
+
+    if not os.path.isfile(module_file):
+        raise FileNotFoundError(
+            f"Engine '{module_name}' not found. Tried: {module_file}\n"
+            f"Make sure the edu_video_studio extension is installed correctly."
+        )
+
     spec = importlib.util.spec_from_file_location(f"edu_engines.{module_name}", module_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
 
 
 # ── Helpers ──────────────────────────────────────────────────────
