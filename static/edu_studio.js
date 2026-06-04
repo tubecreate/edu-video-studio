@@ -1,4 +1,4 @@
-/**
+﻿﻿/**
 
 
 
@@ -22606,7 +22606,8 @@ async function manualAnalyze() {
 
 
 
-                // Safely escape backslashes that are not followed by valid JSON escape chars (like " \ / b f n r t u)
+                // Safely escape lone backslashes not followed by valid JSON escape chars (", \, /, b, f, n, r, t, u).
+                // Alternation (\\\\) ensures double-backslash pairs are matched atomically and skipped (fixes \\' handling).
 
 
 
@@ -22621,8 +22622,7 @@ async function manualAnalyze() {
 
 
 
-
-                return s.replace(/\\([^"\\\/bfnrtu])/g, '\\\\$1');
+                return s.replace(/(\\\\)|\\([^\"\\\\/bfnrtu])/g, (m, vp, bc) => vp ? vp : '\\\\' + bc);
 
 
 
@@ -23742,6 +23742,17 @@ async function manualAnalyze() {
 
 
 
+
+        // Guard: if rawInput looks like JSON but doesn't have a valid 'steps' array,
+        // block here — don't send to AI (avoids HTTP 500 on machines without API keys)
+        if (rawInput.startsWith('{') || rawInput.startsWith('[')) {
+            if (!parsed) {
+                alert('\u274C JSON kh\u00f4ng h\u1ee3p l\u1ec7. Ki\u1ec3m tra l\u1ea1i c\u00fa ph\u00e1p JSON c\u1ee7a script.');
+            } else if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+                alert('\u274C JSON h\u1ee3p l\u1ec7 nh\u01b0ng thi\u1ebfu tr\u01b0\u1eddng "steps". \u0110\u00e2y kh\u00f4ng ph\u1ea3i \u0111\u1ecbnh d\u1ea1ng Script b\u00e0i h\u1ecdc h\u1ee3p l\u1ec7.');
+            }
+            return;
+        }
     }
 
 
