@@ -29,33 +29,58 @@ _ENGINES_DIR = os.path.join(_EXT_DIR, "engines")
 
 
 def _load_engine(module_name: str):
-    """Load an engine module by name from the engines/ directory."""
-    module_file = os.path.join(_ENGINES_DIR, f"{module_name}.py")
+    """Load an engine module by name from the engines/ directory.
 
-    # Fallback: if engines/ doesn't exist next to __file__, try to find the
-    # actual extension directory via extension_manager (handles cases where
-    # the folder is named differently on the target machine, e.g. 'eduvideo_studio')
-    if not os.path.isfile(module_file):
+    Uses a multi-step fallback to handle machines where the extension folder
+    may be named differently (e.g. 'eduvideo_studio' vs 'edu_video_studio').
+    """
+    candidates = []
+
+    # 1. Primary: engines/ next to __file__ (works in any folder name)
+    candidates.append(os.path.join(_ENGINES_DIR, f"{module_name}.py"))
+
+    # 2. Try extension_manager with all known name variants
+    if not any(os.path.isfile(c) for c in candidates):
         try:
             from tubecli.core.extension_manager import extension_manager
-            ext = extension_manager.get("edu_video_studio")
-            if ext and ext.extension_dir:
-                alt_file = os.path.join(ext.extension_dir, "engines", f"{module_name}.py")
-                if os.path.isfile(alt_file):
-                    module_file = alt_file
+            for ext_name in ["edu_video_studio", "eduvideo_studio", "edu-video-studio"]:
+                ext = extension_manager.get(ext_name)
+                if ext and getattr(ext, "extension_dir", None):
+                    candidates.append(
+                        os.path.join(ext.extension_dir, "engines", f"{module_name}.py")
+                    )
         except Exception:
             pass
 
+    # 3. Last resort: scan siblings of _EXT_DIR for any folder with engines/
+    if not any(os.path.isfile(c) for c in candidates):
+        try:
+            ext_base = os.path.dirname(_EXT_DIR)
+            for entry in sorted(os.listdir(ext_base)):
+                entry_lower = entry.lower().replace("-", "_")
+                if "edu" in entry_lower and "video" in entry_lower:
+                    candidate = os.path.join(ext_base, entry, "engines", f"{module_name}.py")
+                    if os.path.isfile(candidate):
+                        candidates.append(candidate)
+                        break
+        except Exception:
+            pass
+
+    # Use first existing candidate
+    module_file = next((c for c in candidates if os.path.isfile(c)), candidates[0])
+
     if not os.path.isfile(module_file):
         raise FileNotFoundError(
-            f"Engine '{module_name}' not found. Tried: {module_file}\n"
-            f"Make sure the edu_video_studio extension is installed correctly."
+            f"Engine '{module_name}' not found.\n"
+            f"Searched paths:\n" + "\n".join(f"  - {c}" for c in candidates) +
+            f"\nMake sure the edu_video_studio extension is installed correctly and engines/ folder exists."
         )
 
     spec = importlib.util.spec_from_file_location(f"edu_engines.{module_name}", module_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
 
 
 
