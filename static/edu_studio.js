@@ -29550,6 +29550,87 @@ function setScriptView(mode) {
 
 
 
+function parseRelaxedJson(str) {
+    if (!str) return null;
+    let s = str.trim();
+    
+    // 1. Strip markdown fences if present
+    s = s.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1').trim();
+    
+    // 2. Try standard JSON parse first
+    try {
+        return JSON.parse(s);
+    } catch (e) {}
+
+    // 3. Remove comments
+    s = s.replace(/\/\*[\s\S]*?\*\//g, '');
+    s = s.split('\n').map(line => {
+        const match = line.match(/(?<!:)\/\/.*$/);
+        if (match) {
+            return line.substring(0, match.index);
+        }
+        return line;
+    }).join('\n');
+
+    // 4. Try parsing using Function constructor (natively parses JS objects, trailing commas, single quotes, etc.)
+    try {
+        const parsed = new Function('return (' + s + ')')();
+        if (parsed && typeof parsed === 'object') {
+            return parsed;
+        }
+    } catch (e) {}
+
+    // 5. Auto-repair common syntax errors
+    s = s.replace(/\}\s*\{/g, '},{');
+    s = s.replace(/\]\s*\[/g, '],[');
+    s = s.replace(/\}\s*\[/g, '},[');
+    s = s.replace(/\]\s*\{/g, '],{');
+    
+    // Balance open/close brackets
+    let openBraces = (s.match(/\{/g) || []).length;
+    let closeBraces = (s.match(/\}/g) || []).length;
+    let openBrackets = (s.match(/\[/g) || []).length;
+    let closeBrackets = (s.match(/\]/g) || []).length;
+    
+    if (openBrackets > closeBrackets) {
+        s += ']'.repeat(openBrackets - closeBrackets);
+    }
+    if (openBraces > closeBraces) {
+        s += '}'.repeat(openBraces - closeBraces);
+    }
+    
+    // Extract main object/array
+    if (!s.startsWith('{') && !s.startsWith('[')) {
+        const firstBrace = s.indexOf('{');
+        const lastBrace = s.lastIndexOf('}');
+        const firstBracket = s.indexOf('[');
+        const lastBracket = s.lastIndexOf(']');
+        
+        let candidate = '';
+        if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+            candidate = s.substring(firstBrace, lastBrace + 1);
+        } else if (firstBracket !== -1 && lastBracket !== -1) {
+            candidate = s.substring(firstBracket, lastBracket + 1);
+        }
+        
+        if (candidate) {
+            try {
+                const parsed = new Function('return (' + candidate + ')')();
+                if (parsed && typeof parsed === 'object') {
+                    return parsed;
+                }
+            } catch (e) {}
+        }
+    }
+
+    // Final attempt
+    try {
+        return new Function('return (' + s + ')')();
+    } catch (e) {
+        throw new Error("Không thể phân tích cú pháp script. Lỗi: " + e.message);
+    }
+}
+
 function renderScriptUI(script) {
 
 
@@ -30318,7 +30399,7 @@ function renderScriptUI(script) {
 
 
 
-                parsed = JSON.parse(ta.value);
+                parsed = parseRelaxedJson(ta.value);
 
 
 
@@ -31006,7 +31087,7 @@ function renderScriptUI(script) {
 
 
 
-                const parsed = JSON.parse(ta.value);
+                const parsed = parseRelaxedJson(ta.value);
 
 
 
