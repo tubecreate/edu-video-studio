@@ -2796,7 +2796,12 @@
 
 
 
-    <script src="/edu-video-studio-static/edu_studio.js?v=20260604_02"></script>
+        <!-- Load core state, networking and variables first -->
+    <script src="/edu-video-studio-static/edu_studio_core.js?v=20260606_01"></script>
+    <!-- Load canvas preview drawing, interactive editor coordinates & dragging next -->
+    <script src="/edu-video-studio-static/preview_renderer.js?v=20260606_01"></script>
+    <!-- Load parameters editor & custom dynamic forms last -->
+    <script src="/edu-video-studio-static/params_editor.js?v=20260606_01"></script>
 
 </body>
 
