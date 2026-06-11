@@ -531,6 +531,23 @@
 
                             </div>
 
+                            <!-- Manual Upload Section -->
+                            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px;margin-top:16px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+                                    <div style="font-weight:600;font-size:13px;">📤 Tải lên file Audio thủ công (Full Audio)</div>
+                                    <button class="btn" onclick="copyFullVoiceText()" style="font-size:11px;padding:4px 10px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);display:flex;align-items:center;gap:4px;">
+                                        📋 Copy thoại kịch bản
+                                    </button>
+                                </div>
+                                <div style="font-size:11px;color:var(--text-3);line-height:1.4;">Tải lên file ghi âm sẵn toàn bộ bài giảng (định dạng .mp3, .wav, .m4a, v.v.). Hệ thống sẽ dùng mô hình Whisper AI để tự động căn chỉnh và phân đoạn vào các step theo kịch bản.</div>
+                                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                                    <button class="btn" onclick="document.getElementById('manualFullAudioUpload').click()" id="btnSelectManualAudio" style="background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);">📁 Chọn file âm thanh</button>
+                                    <input type="file" id="manualFullAudioUpload" accept="audio/*" style="display:none;" onchange="uploadManualFullAudio(event)">
+                                    <span id="manualAudioFilename" style="font-size:11px;color:var(--text-2);word-break:break-all;max-width:200px;">Chưa chọn file</span>
+                                    <button class="btn btn-primary" id="btnUploadManualAudio" onclick="submitManualAudio()" style="margin-left:auto;display:none;">📤 Upload & Căn chỉnh</button>
+                                </div>
+                            </div>
+
 
 
                             <!-- Audio Status -->

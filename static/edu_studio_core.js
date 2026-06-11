@@ -9127,3 +9127,116 @@ async function cancelAllActiveRenders() {
         }
     }
 }
+
+
+let _selectedManualAudioFile = null;
+
+function uploadManualFullAudio(event) {
+    const file = event.target.files[0];
+    const filenameEl = document.getElementById('manualAudioFilename');
+    const uploadBtn = document.getElementById('btnUploadManualAudio');
+    
+    if (file) {
+        _selectedManualAudioFile = file;
+        if (filenameEl) filenameEl.textContent = file.name;
+        if (uploadBtn) uploadBtn.style.display = 'inline-block';
+    } else {
+        _selectedManualAudioFile = null;
+        if (filenameEl) filenameEl.textContent = 'Chưa chọn file';
+        if (uploadBtn) uploadBtn.style.display = 'none';
+    }
+}
+
+async function submitManualAudio() {
+    if (!currentProject || !currentLesson || !_selectedManualAudioFile) {
+        alert('Vui lòng chọn file âm thanh trước.');
+        return;
+    }
+    
+    const statusEl = document.getElementById('audioStatus');
+    const msgEl = document.getElementById('audioMsg');
+    const progressEl = document.getElementById('audioProgress');
+    const selectBtn = document.getElementById('btnSelectManualAudio');
+    const uploadBtn = document.getElementById('btnUploadManualAudio');
+    
+    if (statusEl) statusEl.classList.remove('hidden');
+    if (msgEl) msgEl.textContent = 'Đang tải file audio lên và chạy căn chỉnh Whisper... (Có thể mất 1-2 phút)';
+    if (progressEl) progressEl.style.width = '30%';
+    
+    if (selectBtn) selectBtn.disabled = true;
+    if (uploadBtn) uploadBtn.disabled = true;
+    
+    const formData = new FormData();
+    formData.append('project_id', currentProject.id);
+    formData.append('lesson_id', currentLesson.id);
+    formData.append('audio', _selectedManualAudioFile);
+    
+    try {
+        const resp = await fetch(`${API}/upload-audio`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (progressEl) progressEl.style.width = '80%';
+        
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.detail || 'Lỗi căn khớp âm thanh thủ công');
+        }
+        
+        if (progressEl) progressEl.style.width = '100%';
+        if (msgEl) msgEl.textContent = '✅ Đã tải lên và căn khớp thành công!';
+        
+        currentTiming = data.result;
+        
+        if (previewAudio) { 
+            previewAudio.pause(); 
+            previewAudio = null; 
+        }
+        
+        _showToast('✅ Tải lên và căn khớp audio thành công!', 'success', 3000);
+        
+        updateAudioTab();
+        
+        // Reset state
+        _selectedManualAudioFile = null;
+        const filenameEl = document.getElementById('manualAudioFilename');
+        if (filenameEl) filenameEl.textContent = 'Chưa chọn file';
+        if (uploadBtn) uploadBtn.style.display = 'none';
+        
+    } catch (err) {
+        console.error('Manual audio upload failed:', err);
+        if (msgEl) msgEl.textContent = '❌ Lỗi: ' + err.message;
+        _showToast('❌ Căn chỉnh audio thất bại: ' + err.message, 'danger', 5000);
+    } finally {
+        if (selectBtn) selectBtn.disabled = false;
+        if (uploadBtn) uploadBtn.disabled = false;
+        setTimeout(() => {
+            if (statusEl) statusEl.classList.add('hidden');
+        }, 3000);
+    }
+}
+
+function copyFullVoiceText() {
+    if (!currentScript || !currentScript.steps) {
+        alert('Chưa có kịch bản.');
+        return;
+    }
+    const lines = currentScript.steps
+        .map(s => (s.voice_text || '').trim())
+        .filter(t => t.length > 0);
+    
+    if (lines.length === 0) {
+        alert('Không có nội dung thoại.');
+        return;
+    }
+    
+    const fullText = lines.join('\n\n');
+    
+    navigator.clipboard.writeText(fullText).then(() => {
+        _showToast('📋 Đã copy toàn bộ thoại kịch bản vào clipboard!', 'success', 3000);
+    }).catch(err => {
+        console.error('Failed to copy text: ', err);
+        alert('Không thể tự động copy, lỗi: ' + err.message);
+    });
+}

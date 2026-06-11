@@ -320,7 +320,7 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
 
     # 2. Determine worker count based on CPU cores
     cpu_count = os.cpu_count() or 4
-    num_workers = max(1, min(cpu_count - 1, 4)) # Cap at 4 workers to prevent NVENC session limits
+    num_workers = max(1, min(cpu_count - 1, 8)) # Cap at 8 workers since chunks use fast CPU encode
 
     # Fallback to single worker if total duration is extremely short (under 5 seconds)
     if total_frames < 150:
@@ -386,13 +386,13 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
                 "--fps", "30",
                 "--mode", "pipe",
                 "--outputFile", chunk_path,
-                "--codec", enc["codec"],
-                "--preset", enc["preset"],
+                "--codec", "libx264",
+                "--preset", "ultrafast",
                 "--startFrame", str(start),
                 "--endFrame", str(end)
             ]
-            if enc.get("extra"):
-                cmd_w.extend(["--ffmpegExtra", " ".join(enc["extra"])])
+            # Explicitly pass thread limit per chunk and crf to avoid over-utilizing CPU
+            cmd_w.extend(["--ffmpegExtra", "-crf 22 -threads 2"])
             # Note: We do NOT pass --audio to workers to avoid audio sync issues in chunked videos
 
             proc = await asyncio.create_subprocess_exec(
@@ -506,29 +506,57 @@ async def _render_pipe(node_exe, ext_dir, script_path, timing_path, output_dir,
                 pass
             raise RuntimeError(f"FFmpeg chunk concat failed: {stderr_concat.decode()[:300]}")
 
-        # 4. Mux Audio with raw video
+        # 4. Mux Audio, Transcode to target format, and produce final video
+        if progress_callback:
+            progress_callback(98, "🔊 Ghép âm thanh & Transcode video...")
+            
+        cmd_mux = [
+            ffmpeg_exe, "-y",
+            "-i", raw_video
+        ]
+        
         if os.path.isfile(audio_path):
-            if progress_callback:
-                progress_callback(98, "🔊 Ghép âm thanh...")
-            cmd_mux = [
-                ffmpeg_exe, "-y",
-                "-i", raw_video,
-                "-i", audio_path,
-                "-c:v", "copy",
+            cmd_mux.extend(["-i", audio_path])
+            
+        cmd_mux.extend([
+            "-c:v", enc["codec"],
+            "-preset", enc["preset"]
+        ])
+        
+        if enc.get("extra"):
+            cmd_mux.extend(enc["extra"])
+            
+        if os.path.isfile(audio_path):
+            cmd_mux.extend([
                 "-c:a", "aac", "-b:a", "128k",
-                "-shortest",
-                final_video
-            ]
-            logger.info(f"[Pipe] Muxing audio: {' '.join(cmd_mux)}")
-            proc_mux = await asyncio.create_subprocess_exec(
-                *cmd_mux, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            _, stderr_mux = await proc_mux.communicate()
-            if proc_mux.returncode != 0:
-                logger.warning(f"[Pipe] Mux failed, using raw: {stderr_mux.decode()[:200]}")
+                "-shortest"
+            ])
+            
+        cmd_mux.append(final_video)
+        
+        logger.info(f"[Pipe] Final transcode & mux: {' '.join(cmd_mux)}")
+        proc_mux = await asyncio.create_subprocess_exec(
+            *cmd_mux, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr_mux = await proc_mux.communicate()
+        if proc_mux.returncode != 0:
+            logger.warning(f"[Pipe] Final transcode failed: {stderr_mux.decode()[:200]}, falling back to copy raw")
+            # Fallback to copy if transcoding fails for some reason
+            if os.path.isfile(audio_path):
+                cmd_fb = [
+                    ffmpeg_exe, "-y",
+                    "-i", raw_video, "-i", audio_path,
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                    "-shortest", final_video
+                ]
+                proc_fb = await asyncio.create_subprocess_exec(
+                    *cmd_fb, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await proc_fb.communicate()
+            else:
                 shutil.copy2(raw_video, final_video)
         else:
-            shutil.copy2(raw_video, final_video)
+            logger.info(f"[Pipe] Transcode & Mux completed successfully.")
 
         # 5. Cleanup temp chunk files
         try:

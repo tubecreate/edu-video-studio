@@ -92,6 +92,30 @@ def _load_engine(module_name: str):
     return mod
 
 
+def _find_executable(name: str) -> str:
+    """Find a working ffmpeg or ffprobe executable, avoiding the broken miniconda version."""
+    import os, shutil
+    preferred_dirs = [
+        r"C:\ffmpeg-7.1.1-essentials_build\bin",
+        r"C:\Users\ADMIN\AppData\Local\com.debpalash.omnivoice-studio\tools"
+    ]
+    for d in preferred_dirs:
+        exe_path = os.path.join(d, f"{name}.exe")
+        if os.path.exists(exe_path):
+            return exe_path
+    found = shutil.which(name)
+    if found:
+        if "miniconda3" in found.lower():
+            for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+                if not path_dir or "miniconda3" in path_dir.lower():
+                    continue
+                exe_path = os.path.join(path_dir, f"{name}.exe")
+                if os.path.exists(exe_path):
+                    return exe_path
+        return found
+    return name
+
+
 
 
 
@@ -667,8 +691,8 @@ async def _ensure_video_has_audio(filepath: str):
     """Ensure the video file has a stereo audio track. If none, append a silent audio track."""
     import shutil
     import asyncio
-    ffprobe_exe = shutil.which("ffprobe") or "ffprobe"
-    ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+    ffprobe_exe = _find_executable("ffprobe")
+    ffmpeg_exe = _find_executable("ffmpeg")
     
     # Check if video has an audio stream
     cmd_probe = [
@@ -1420,7 +1444,7 @@ async def generate_audio_step(request: Request):
     
     # Recalculate starts/ends and shift words for all steps
     current_offset = 0.0
-    GAP = 0.5
+    GAP = 0.0
     
     # Ensure timing steps match the order of script steps
     script_step_ids = [s.get("id") for s in script.get("steps", [])]
@@ -1526,7 +1550,7 @@ async def generate_timing_estimate(request: Request):
     if not steps:
         raise HTTPException(400, "Script has no steps.")
 
-    GAP = 0.5  # gap between steps (seconds) — same as real TTS
+    GAP = 0.0  # gap between steps (seconds) — same as real TTS
     timing_steps = []
     current_offset = 0.0
 
@@ -3081,3 +3105,293 @@ async def get_publish_status(project_id: str, lesson_id: str):
             platforms[target_key] = {"task_id": task_id, "status": "unknown", "error": str(e)}
 
     return {"success": True, "platforms": platforms}
+
+
+def _find_shot_start_time(segments, shot_text, search_from_idx=0):
+    """
+    Finds the start time of shot_text in segments, starting search from search_from_idx.
+    Uses sliding window matching with word mapping to handle spacing and transcription errors
+    without being penalized by the combined segment window length.
+    """
+    import re
+    from difflib import SequenceMatcher
+    
+    def clean(t): return re.sub(r'[^\w\s]', '', t).lower().strip()
+    
+    words = clean(shot_text).split()
+    if not words:
+        st = segments[search_from_idx]["start"] if search_from_idx < len(segments) else 0
+        return st, search_from_idx
+        
+    n_segs = len(segments)
+    
+    # Generate Anchors
+    anchors = []
+    anchor_len = min(len(words), 8)
+    anchors.append(" ".join(words[:anchor_len]))
+    if anchor_len > 4:
+        anchors.append(" ".join(words[:4]))
+    if anchor_len > 2:
+        anchors.append(" ".join(words[:3]))
+        
+    best_score = 0.0
+    best_seg_idx = search_from_idx
+    
+    # Search window: next 8 segments to keep sequence, but prevent massive overshoots
+    search_range = range(search_from_idx, min(search_from_idx + 8, n_segs))
+    if search_from_idx >= n_segs:
+        search_range = [n_segs - 1] if n_segs > 0 else [0]
+        
+    for j in search_range:
+        # Get segments and build window text
+        window_segs = segments[j : min(j+4, n_segs)]
+        window_seg_texts = [clean(s.get("text", "")) for s in window_segs]
+        
+        # Map word indices to segment offsets
+        word_to_seg_offset = []
+        window_words = []
+        for m, t in enumerate(window_seg_texts):
+            sw = t.split()
+            window_words.extend(sw)
+            word_to_seg_offset.extend([m] * len(sw))
+            
+        # A. Exact Match of any Anchor in window words
+        matched_exact = False
+        for anchor in anchors:
+            anchor_words = anchor.split()
+            L = len(anchor_words)
+            for k in range(len(window_words) - L + 1):
+                if window_words[k : k + L] == anchor_words:
+                    score = 0.95 + (1.0 / (anchors.index(anchor) + 1)) * 0.05
+                    actual_seg_idx = j + word_to_seg_offset[k]
+                    if score > best_score:
+                        best_score = score
+                        best_seg_idx = actual_seg_idx
+                        matched_exact = True
+                        break
+            if matched_exact:
+                break
+                
+        if matched_exact:
+            continue
+            
+        # B. Fuzzy match using sliding window of same word length
+        anchor_words = anchors[0].split()
+        W = len(anchor_words)
+        if W > 0 and len(window_words) >= W:
+            for sz in range(W, W + 3):
+                for k in range(len(window_words) - sz + 1):
+                    sub = " ".join(window_words[k : k + sz])
+                    ratio = SequenceMatcher(None, anchors[0], sub).ratio()
+                    if ratio > best_score:
+                        best_score = ratio
+                        best_seg_idx = j + word_to_seg_offset[k]
+                        
+    if best_score > 0.6:
+        st = segments[best_seg_idx]["start"] if best_seg_idx < n_segs else 0
+        return st, best_seg_idx
+    else:
+        # Fallback estimation
+        estimated_span = max(1, len(words) // 5)
+        est_idx = min(search_from_idx + estimated_span, n_segs - 1)
+        st = segments[search_from_idx]["start"] if search_from_idx < n_segs else (segments[-1]["end"] if segments else 0)
+        return st, est_idx
+
+
+def _redistribute_zero_duration(shot_starts, total_duration, logger=None):
+    """
+    Fix 0-duration shots caused by consecutive identical start times.
+    Groups consecutive shots with the same start time and redistributes
+    the available time range evenly among them.
+    """
+    if len(shot_starts) <= 1:
+        return shot_starts
+    
+    fixed = list(shot_starts)
+    n = len(fixed)
+    
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and abs(fixed[j] - fixed[i]) < 0.01:
+            j += 1
+        
+        group_size = j - i
+        if group_size > 1:
+            group_start = fixed[i]
+            group_end = fixed[j] if j < n else total_duration
+            available = group_end - group_start
+            
+            if available > 0.5:
+                per_shot = available / group_size
+                for k in range(group_size):
+                    fixed[i + k] = group_start + (k * per_shot)
+                if logger:
+                    logger.info(f"[Redistribute] Fixed {group_size} zero-duration steps at {group_start:.2f}s, "
+                                f"redistributed {available:.2f}s ({per_shot:.2f}s each)")
+        i = j
+    
+    return fixed
+
+
+@router.post("/upload-audio")
+async def upload_audio(request: Request):
+    """
+    Upload a full audio file, run Whisper alignment, split by step with FFmpeg,
+    and update timing_map.json.
+    """
+    import shutil, subprocess, uuid, os, re
+    from fastapi import UploadFile
+    import importlib.util
+
+    form = await request.form()
+    project_id = form.get("project_id")
+    lesson_id = form.get("lesson_id")
+    audio_file: UploadFile = form.get("audio")
+
+    if not project_id or not lesson_id or not audio_file:
+        raise HTTPException(400, "project_id, lesson_id and audio file are required")
+
+    lesson_dir = os.path.join(_projects_dir(), project_id, "lessons", lesson_id)
+    script_path = os.path.join(lesson_dir, "lesson_script.json")
+    timing_path = os.path.join(lesson_dir, "timing_map.json")
+
+    if not os.path.exists(script_path):
+        raise HTTPException(404, "Lesson script not found")
+
+    script = _read_json(script_path)
+    steps = script.get("steps", [])
+    if not steps:
+        raise HTTPException(400, "Script has no steps.")
+
+    audio_dir = os.path.join(lesson_dir, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+
+    upload_id = uuid.uuid4().hex[:8]
+    ext = os.path.splitext(audio_file.filename)[-1] or ".mp3"
+    
+    uploaded_temp_path = os.path.join(audio_dir, f"upload_{upload_id}{ext}")
+    with open(uploaded_temp_path, "wb") as f:
+        content = await audio_file.read()
+        f.write(content)
+
+    full_audio_path = os.path.join(audio_dir, "full_audio.mp3")
+    ffmpeg_path = _find_executable("ffmpeg")
+    ffprobe_path = _find_executable("ffprobe")
+
+    # Prepend correct ffmpeg directory to PATH so whisper/ffmpeg subprocesses can find it
+    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    if ffmpeg_dir and os.path.exists(ffmpeg_dir):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+    conv_cmd = [ffmpeg_path, "-y", "-i", uploaded_temp_path, "-acodec", "libmp3lame", "-ab", "128k", full_audio_path]
+    conv_res = subprocess.run(conv_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if conv_res.returncode != 0:
+        err_msg = conv_res.stderr.decode("utf-8", errors="ignore")
+        logger.error(f"[ManualUpload] ffmpeg conversion failed: {err_msg}")
+        raise HTTPException(
+            500, f"ffmpeg conversion failed: {err_msg[:300]}"
+        )
+    if not os.path.exists(full_audio_path) or os.path.getsize(full_audio_path) == 0:
+        raise HTTPException(500, "Transcoded audio file was not created or is empty.")
+    
+    try:
+        os.remove(uploaded_temp_path)
+    except:
+        pass
+
+    step_texts = []
+    for s in steps:
+        txt = s.get("voice_text", "").strip()
+        txt = re.sub(r'\[.*?\]', '', txt).strip()
+        step_texts.append(txt)
+
+    try:
+        from tubecli.config import DATA_DIR as _DATA_DIR
+        whisper_engine_path = os.path.join(
+            str(_DATA_DIR), "extensions_external", "subtitle_extractor", "engines", "whisper_engine.py"
+        )
+    except Exception:
+        whisper_engine_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "subtitle_extractor", "engines", "whisper_engine.py"
+        )
+
+    if not os.path.exists(whisper_engine_path):
+        raise HTTPException(500, f"Whisper engine not found at {whisper_engine_path}")
+
+    spec = importlib.util.spec_from_file_location("whisper_eng", whisper_engine_path)
+    whisper_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(whisper_mod)
+
+    logger.info("[ManualUpload] Running Whisper on uploaded audio...")
+    whisper_result = await whisper_mod.extract_whisper(full_audio_path, language=None, model_size="small")
+
+    if whisper_result.get("status") != "success":
+        raise HTTPException(500, f"Whisper failed: {whisper_result.get('message', 'unknown error')}")
+
+    whisper_subs = whisper_result.get("subtitles", [])
+    if not whisper_subs:
+        raise HTTPException(500, "Whisper returned no segments")
+
+    segments = [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in whisper_subs]
+
+    total_audio_duration = 0.0
+    try:
+        probe_cmd = [ffprobe_path, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", full_audio_path]
+        probe_result = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        total_audio_duration = float(probe_result.stdout.strip())
+    except Exception:
+        total_audio_duration = segments[-1]["end"] if segments else 0.0
+
+    step_starts = []
+    curr_seg_idx = 0
+    for s_text in step_texts:
+        st, curr_seg_idx = _find_shot_start_time(segments, s_text, curr_seg_idx)
+        step_starts.append(st)
+
+    step_starts = _redistribute_zero_duration(step_starts, total_audio_duration, logger)
+
+    timing_steps = []
+    for i, step in enumerate(steps):
+        step_id = step.get("id", i + 1)
+        start_t = step_starts[i]
+        
+        if i + 1 < len(step_starts):
+            end_t = step_starts[i+1]
+        else:
+            end_t = total_audio_duration
+
+        duration = max(0.2, end_t - start_t)
+        audio_filename = f"step_{step_id:03d}.mp3"
+        step_out_path = os.path.join(audio_dir, audio_filename)
+
+        cmd = [ffmpeg_path, "-y", "-i", full_audio_path, "-ss", f"{start_t:.3f}", "-t", f"{duration:.3f}",
+               "-acodec", "libmp3lame", "-ab", "128k", step_out_path]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0:
+            err_msg = res.stderr.decode("utf-8", errors="ignore")
+            logger.error(f"[ManualUpload] Failed to split audio for step {step_id}: {err_msg}")
+            raise HTTPException(
+                500, f"Failed to split audio for step {step_id}: {err_msg[:300]}"
+            )
+
+        timing_steps.append({
+            "id": step_id,
+            "start": round(start_t, 3),
+            "end": round(end_t, 3),
+            "audio": audio_filename,
+            "duration": round(duration, 3),
+            "words": []
+        })
+
+    timing_map = {
+        "steps": timing_steps,
+        "total_duration": round(total_audio_duration, 3),
+        "merged_audio": "audio/full_audio.mp3",
+        "voice": "manual_upload",
+        "tts_engine": "manual"
+    }
+    _write_json(timing_path, timing_map)
+
+    return {"status": "success", "result": timing_map}

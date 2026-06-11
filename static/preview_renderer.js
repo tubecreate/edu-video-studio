@@ -1,3 +1,27 @@
+function _getCurStepIdx(previewTime, tSteps) {
+    if (!tSteps || tSteps.length === 0) return 0;
+    const len = tSteps.length;
+    if (previewTime < tSteps[0].start) return 0;
+    if (previewTime > tSteps[len - 1].end) return len - 1;
+    for (let i = 0; i < len; i++) {
+        if (previewTime >= tSteps[i].start && previewTime <= tSteps[i].end) {
+            return i;
+        }
+    }
+    for (let i = 0; i < len - 1; i++) {
+        if (previewTime > tSteps[i].end && previewTime < tSteps[i + 1].start) {
+            return i;
+        }
+    }
+    let activeIdx = 0;
+    for (let i = 0; i < len; i++) {
+        if (previewTime >= tSteps[i].start) {
+            activeIdx = i;
+        }
+    }
+    return activeIdx;
+}
+
 function _resizePreviewCanvas(cvs) {
 
     if (!cvs) return { W: 1080, H: 1920 };
@@ -445,13 +469,7 @@ function _runPreviewFrame(ctx, cvs) {
 
     // Determine current step index
 
-    let curStepIdx = 0;
-
-    for (let i = 0; i < safeLen; i++) {
-
-        if (previewTime >= tSteps[i].start && previewTime <= tSteps[i].end) { curStepIdx = i; break; }
-
-    }
+    let curStepIdx = _getCurStepIdx(previewTime, tSteps);
 
     if (window._lastStepIdx !== curStepIdx) {
 
@@ -3174,25 +3192,7 @@ function updateElementsDropdown() {
 
     // Determine active step index
 
-    let curStepIdx = 0;
-
-    const tSteps = currentTiming.steps;
-
-    if (tSteps) {
-
-        for (let i = 0; i < tSteps.length; i++) {
-
-            if (previewTime >= tSteps[i].start && previewTime <= tSteps[i].end) {
-
-                curStepIdx = i;
-
-                break;
-
-            }
-
-        }
-
-    }
+    let curStepIdx = _getCurStepIdx(previewTime, tSteps);
 
     const step = currentScript.steps[curStepIdx];
 
@@ -3248,25 +3248,7 @@ function selectElementFromDropdown(idxStr) {
 
     }
 
-    let curStepIdx = 0;
-
-    const tSteps = currentTiming.steps;
-
-    if (tSteps) {
-
-        for (let i = 0; i < tSteps.length; i++) {
-
-            if (previewTime >= tSteps[i].start && previewTime <= tSteps[i].end) {
-
-                curStepIdx = i;
-
-                break;
-
-            }
-
-        }
-
-    }
+    let curStepIdx = _getCurStepIdx(previewTime, tSteps);
 
     const step = currentScript.steps[curStepIdx];
 

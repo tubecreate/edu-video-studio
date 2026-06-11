@@ -233,9 +233,10 @@ async def _merge_audio_files(audio_files: list, output_path: str, gaps: list = N
             gap_dur = 0.5
             if gaps and i < len(gaps):
                 gap_dur = gaps[i]
-            inputs.extend(["-f", "lavfi", "-i", f"anullsrc=channel_layout=mono:sample_rate=24000:duration={gap_dur}"])
-            filter_parts.append(f"[{idx}:a]")
-            idx += 1
+            if gap_dur > 0:
+                inputs.extend(["-f", "lavfi", "-i", f"anullsrc=channel_layout=mono:sample_rate=24000:duration={gap_dur}"])
+                filter_parts.append(f"[{idx}:a]")
+                idx += 1
 
     filter_str = "".join(filter_parts) + f"concat=n={len(filter_parts)}:v=0:a=1[out]"
 
@@ -270,7 +271,7 @@ async def generate_tts_for_script(
     timing_steps = []
     audio_files = []
     current_offset = 0.0
-    GAP = 0.5  # seconds between steps to hold visual settled results
+    GAP = 0.0  # seconds between steps to hold visual settled results
 
     for i, step in enumerate(steps):
         voice_text = step.get("voice_text", "").strip()

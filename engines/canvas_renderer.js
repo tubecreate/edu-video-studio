@@ -614,10 +614,13 @@ global.drawEmoji = function(ctx, emoji, x, y, size) {
         ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
         return;
     }
+    // Fallback: render via canvas font (PNG not cached yet or failed to download)
+    // Always save/restore and ensure white fillStyle so emoji is visible on dark backgrounds
     ctx.save();
     ctx.font = `${Math.round(size)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'; // ensure visible on dark bg
     ctx.fillText(emoji, x, y);
     ctx.restore();
 };
@@ -1158,15 +1161,8 @@ function drawBg() {
 
         }
 
-        // Soft scanlines overlay
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
-
-        for (let y = 0; y < H; y += 4) {
-
-            ctx.fillRect(0, y, W, 1);
-
-        }
+        // Soft scanlines overlay (Optimized with Offscreen Canvas)
+        ctx.drawImage(getPixelScanlinesCanvas(), 0, 0);
 
         ctx.restore();
 
@@ -2623,20 +2619,25 @@ function renderElementAtY(el, cursorY, stepProgress) {
                             }
                             if (prop === 'fill') {
                                 return function(...args) {
-                                    const oldBlur = target.shadowBlur;
-                                    const oldColor = target.shadowColor;
-                                    const oldOffsetX = target.shadowOffsetX;
-                                    const oldOffsetY = target.shadowOffsetY;
-                                    target.shadowBlur = 0;
-                                    target.shadowColor = 'rgba(0,0,0,0)';
-                                    target.shadowOffsetX = 0;
-                                    target.shadowOffsetY = 0;
-                                    const res = target.fill.apply(target, args);
-                                    target.shadowBlur = oldBlur;
-                                    target.shadowColor = oldColor;
-                                    target.shadowOffsetX = oldOffsetX;
-                                    target.shadowOffsetY = oldOffsetY;
-                                    return res;
+                                    // Light styles: suppress neon glow on fill (looks harsh on light bg)
+                                    // liquidglass: keep shadow glow for neon circle effect
+                                    if (isLightStyle) {
+                                        const oldBlur = target.shadowBlur;
+                                        const oldColor = target.shadowColor;
+                                        const oldOffsetX = target.shadowOffsetX;
+                                        const oldOffsetY = target.shadowOffsetY;
+                                        target.shadowBlur = 0;
+                                        target.shadowColor = 'rgba(0,0,0,0)';
+                                        target.shadowOffsetX = 0;
+                                        target.shadowOffsetY = 0;
+                                        const res = target.fill.apply(target, args);
+                                        target.shadowBlur = oldBlur;
+                                        target.shadowColor = oldColor;
+                                        target.shadowOffsetX = oldOffsetX;
+                                        target.shadowOffsetY = oldOffsetY;
+                                        return res;
+                                    }
+                                    return target.fill.apply(target, args);
                                 };
                             }
                             const val = target[prop];
@@ -2822,16 +2823,22 @@ function renderElementAtY(el, cursorY, stepProgress) {
                                         else if (artStyle === 'sketchnote') newVal = 'rgba(255, 255, 255, 0.95)'; // clean white notebook paper fill
 
                                         else if (artStyle === 'liquidglass') {
+                                             // Deep dark-glass fill: preserve circle/node backgrounds as visible
+                                             // dark surfaces so icons render clearly against them.
+                                             // High-opacity fills (circle backgrounds) keep dark glass base.
+                                             // Low-opacity fills (overlays) get subtle white glass tint.
+                                             const ma = lowerVal.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\)/);
+                                             const origAlpha = ma && ma[4] !== undefined ? parseFloat(ma[4]) : 1.0;
+                                             if (origAlpha > 0.5) {
+                                                 // Solid node/circle background — keep dark + glass readable
+                                                 newVal = 'rgba(8,14,32,0.72)';
+                                             } else {
+                                                 // Overlay/tint — use subtle frosted white
+                                                 const a = Math.min(0.18, origAlpha);
+                                                 newVal = `rgba(255,255,255,${a})`;
+                                             }
 
-                                            // Frosted glass tint: keep alpha if any, otherwise use medium translucency
-
-                                            const ma = lowerVal.match(/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\)/);
-
-                                            const a = ma ? Math.min(0.18, parseFloat(ma[1])) : 0.08;
-
-                                            newVal = `rgba(255,255,255,${a})`;
-
-                                        }
+                                         }
 
                                     }
 
@@ -2948,6 +2955,55 @@ function renderElementAtY(el, cursorY, stepProgress) {
 
                     const fn = new Function('ctx', 'W', 'H', 'MX', 'cursorY', 'stepProgress', 'time', 'el', 'T', 'rc', 'wrapText', 'drawEmoji', el.code);
 
+                    // Wrap customCtx to intercept fillText for emoji — use drawEmoji (Twemoji PNG) instead
+                    // of canvas font rendering which can be blurry/invisible after ctx.restore() resets fillStyle.
+                    const emojiRegex = /[\u{1F300}-\u{1FFFF}]|[\u{2600}-\u{27BF}]|[\u{2300}-\u{23FF}]/u;
+                    const customCtxWithEmoji = new Proxy(customCtx, {
+                        get(target, prop) {
+                            if (prop === 'fillText') {
+                                return function(text, x, y, maxWidth) {
+                                    // Check if text is a single emoji character
+                                    const trimmed = String(text || '').trim();
+                                    if (trimmed.length <= 4 && emojiRegex.test(trimmed)) {
+                                        // Determine font size from current ctx font (read from real ctx)
+                                        const fontStr = ctx.font || '';
+                                        const sizeMatch = fontStr.match(/(\d+)px/);
+                                        const size = sizeMatch ? parseInt(sizeMatch[1]) : 36;
+                                        // Use drawEmoji for full-color crisp rendering (pass real ctx, not proxy)
+                                        if (global.drawEmoji) {
+                                            // textBaseline affects y offset — compensate for 'alphabetic' (default)
+                                            const baseline = ctx.textBaseline || 'alphabetic';
+                                            const yOffset = baseline === 'middle' ? 0 : (baseline === 'alphabetic' ? -size * 0.15 : 0);
+                                            global.drawEmoji(ctx, trimmed, x, y + yOffset, size);
+                                            return;
+                                        }
+                                    }
+                                    // For non-emoji text, check if fillStyle has gone dark (e.g. after ctx.restore()).
+                                    // Check real ctx.fillStyle — if it's a gradient object or a known dark color, reset to white.
+                                    // Threshold 120: sum of R+G+B < 120 is considered "too dark to render visible text"
+                                    const fs = ctx.fillStyle;
+                                    const isDarkFill = typeof fs === 'object' ||
+                                        (typeof fs === 'string' && /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.test(fs) && (()=>{
+                                            const m = fs.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+                                            return m && (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) < 120;
+                                        })());
+                                    if (isDarkFill) {
+                                        ctx.save();
+                                        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                                        ctx.textAlign = ctx.textAlign; // preserve alignment
+                                        if (maxWidth !== undefined) ctx.fillText(text, x, y, maxWidth);
+                                        else ctx.fillText(text, x, y);
+                                        ctx.restore();
+                                        return;
+                                    }
+                                    if (maxWidth !== undefined) ctx.fillText(text, x, y, maxWidth);
+                                    else ctx.fillText(text, x, y);
+                                };
+                            }
+                            return target[prop];
+                        }
+                    });
+
                     ctx.save();
 
                     if (scaleFactor !== 1.0) {
@@ -2964,7 +3020,7 @@ function renderElementAtY(el, cursorY, stepProgress) {
 
                     }
 
-                    const retH = fn(customCtx, W, H, MX, coords.y, stepProgress, timeSecs, el, T, rc, wrapText, global.drawEmoji);
+                    const retH = fn(customCtxWithEmoji, W, H, MX, coords.y, stepProgress, timeSecs, el, T, rc, wrapText, global.drawEmoji);
 
                     ctx.restore();
 
@@ -4155,6 +4211,121 @@ function renderUnifiedElements(unifiedEls, startY) {
 
 }
 
+// ── Offscreen Canvas Caches for Fast Artistic Rendering ─────────
+let watercolorOverlayCanvas = null;
+function getWatercolorOverlayCanvas() {
+    if (watercolorOverlayCanvas) return watercolorOverlayCanvas;
+    const c = createCanvas(W, H);
+    const cx = c.getContext('2d');
+    cx.fillStyle = 'rgba(215, 205, 185, 0.12)';
+    cx.fillRect(0, 0, W, H);
+    const vignette = cx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
+    vignette.addColorStop(0, 'rgba(255, 255, 255, 0)');
+    vignette.addColorStop(1, 'rgba(190, 175, 150, 0.25)');
+    cx.fillStyle = vignette;
+    cx.fillRect(0, 0, W, H);
+    cx.fillStyle = 'rgba(0, 0, 0, 0.03)';
+    for (let j = 0; j < 3000; j++) {
+        const rx = Math.random() * W;
+        const ry = Math.random() * H;
+        const rw = Math.random() * 3 + 1;
+        const rh = Math.random() * 3 + 1;
+        cx.fillRect(rx, ry, rw, rh);
+    }
+    watercolorOverlayCanvas = c;
+    return watercolorOverlayCanvas;
+}
+
+let cartoonHalftoneCanvas = null;
+function getCartoonHalftoneCanvas() {
+    if (cartoonHalftoneCanvas) return cartoonHalftoneCanvas;
+    const c = createCanvas(W, H);
+    const cx = c.getContext('2d');
+    cx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    const spacing = 20;
+    for (let x = spacing / 2; x < W; x += spacing) {
+        for (let y = spacing / 2; y < H; y += spacing) {
+            const dx = x - W / 2;
+            const dy = y - H / 2;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > Math.min(W, H) * 0.36) {
+                const size = Math.min(7, (dist - Math.min(W, H) * 0.36) / 45);
+                if (size > 0.6) {
+                    cx.beginPath(); cx.arc(x, y, size, 0, Math.PI * 2); cx.fill();
+                }
+            }
+        }
+    }
+    cartoonHalftoneCanvas = c;
+    return cartoonHalftoneCanvas;
+}
+
+let sketchOverlayCanvas = null;
+function getSketchOverlayCanvas() {
+    if (sketchOverlayCanvas) return sketchOverlayCanvas;
+    const c = createCanvas(W, H);
+    const cx = c.getContext('2d');
+    cx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    cx.fillRect(0, 0, W, H);
+    const vignette = cx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.4, W / 2, H / 2, Math.max(W, H) * 0.7);
+    vignette.addColorStop(0, 'rgba(255, 255, 255, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.12)');
+    cx.fillStyle = vignette;
+    cx.fillRect(0, 0, W, H);
+    cx.strokeStyle = 'rgba(0, 0, 0, 0.02)';
+    cx.lineWidth = 1;
+    const gridDist = 60;
+    for (let x = 0; x < W; x += gridDist) {
+        cx.beginPath(); cx.moveTo(x, 0); cx.lineTo(x, H); cx.stroke();
+    }
+    for (let y = 0; y < H; y += gridDist) {
+        cx.beginPath(); cx.moveTo(0, y); cx.lineTo(W, y); cx.stroke();
+    }
+    cx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
+    cx.lineWidth = 1.8;
+    cx.beginPath(); cx.moveTo(MX - 15, 38); cx.lineTo(W - MX + 20, 36); cx.stroke();
+    cx.beginPath(); cx.moveTo(MX - 10, 42); cx.lineTo(W - MX + 15, 40); cx.stroke();
+    cx.beginPath(); cx.moveTo(MX - 8, 25); cx.lineTo(MX - 10, H - 30); cx.stroke();
+    cx.beginPath(); cx.moveTo(W - MX + 8, 28); cx.lineTo(W - MX + 6, H - 35); cx.stroke();
+    cx.beginPath(); cx.moveTo(MX - 20, H - 38); cx.lineTo(W - MX + 20, H - 40); cx.stroke();
+    cx.strokeStyle = 'rgba(0, 0, 0, 0.05)'; cx.lineWidth = 1;
+    for (let j = 0; j < 40; j++) {
+        const rx = Math.random() * W;
+        const ry = Math.random() * H;
+        cx.beginPath(); cx.moveTo(rx, ry);
+        cx.lineTo(rx + Math.random() * 50 - 25, ry + Math.random() * 50 - 25);
+        cx.stroke();
+    }
+    sketchOverlayCanvas = c;
+    return sketchOverlayCanvas;
+}
+
+let pixelScanlinesCanvas = null;
+function getPixelScanlinesCanvas() {
+    if (pixelScanlinesCanvas) return pixelScanlinesCanvas;
+    const c = createCanvas(W, H);
+    const cx = c.getContext('2d');
+    cx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    for (let y = 0; y < H; y += 4) {
+        cx.fillRect(0, y, W, 1);
+    }
+    pixelScanlinesCanvas = c;
+    return pixelScanlinesCanvas;
+}
+
+let crtScanlinesCanvas = null;
+function getCrtScanlinesCanvas() {
+    if (crtScanlinesCanvas) return crtScanlinesCanvas;
+    const c = createCanvas(W, H);
+    const cx = c.getContext('2d');
+    cx.fillStyle = 'rgba(0, 0, 0, 0.07)';
+    for (let y = 0; y < H; y += 4) {
+        cx.fillRect(0, y, W, 2);
+    }
+    crtScanlinesCanvas = c;
+    return crtScanlinesCanvas;
+}
+
 // ── Main render ─────────────────────────────────────────────────
 
 let currentFrameTime = 0;
@@ -4311,15 +4482,8 @@ function renderFrame(currentTime) {
 
         ctx.fillText('READY PLAYER 1', W - MX - 180, H - 40);
 
-        // CRT Scanline filter
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.07)';
-
-        for (let y = 0; y < H; y += 4) {
-
-            ctx.fillRect(0, y, W, 2);
-
-        }
+        // CRT Scanline filter (Optimized with Offscreen Canvas)
+        ctx.drawImage(getCrtScanlinesCanvas(), 0, 0);
 
         ctx.restore();
 
@@ -4331,39 +4495,7 @@ function renderFrame(currentTime) {
 
         ctx.globalCompositeOperation = 'multiply';
 
-        ctx.fillStyle = 'rgba(215, 205, 185, 0.12)';
-
-        ctx.fillRect(0, 0, W, H);
-
-        // Soft vignette absorption
-
-        const vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
-
-        vignette.addColorStop(0, 'rgba(255, 255, 255, 0)');
-
-        vignette.addColorStop(1, 'rgba(190, 175, 150, 0.25)');
-
-        ctx.fillStyle = vignette;
-
-        ctx.fillRect(0, 0, W, H);
-
-        // Paper grain noise
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.03)';
-
-        for (let j = 0; j < 3000; j++) {
-
-            const rx = Math.random() * W;
-
-            const ry = Math.random() * H;
-
-            const rw = Math.random() * 3 + 1;
-
-            const rh = Math.random() * 3 + 1;
-
-            ctx.fillRect(rx, ry, rw, rh);
-
-        }
+        ctx.drawImage(getWatercolorOverlayCanvas(), 0, 0);
 
         ctx.restore();
 
@@ -4481,81 +4613,7 @@ function renderFrame(currentTime) {
 
         ctx.globalCompositeOperation = 'multiply';
 
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-
-        ctx.fillRect(0, 0, W, H);
-
-        const vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.4, W / 2, H / 2, Math.max(W, H) * 0.7);
-
-        vignette.addColorStop(0, 'rgba(255, 255, 255, 0)');
-
-        vignette.addColorStop(1, 'rgba(0, 0, 0, 0.12)');
-
-        ctx.fillStyle = vignette;
-
-        ctx.fillRect(0, 0, W, H);
-
-        // 1. Faint engineer sketch graph grid
-
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.02)';
-
-        ctx.lineWidth = 1;
-
-        const gridDist = 60;
-
-        for (let x = 0; x < W; x += gridDist) {
-
-            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-
-        }
-
-        for (let y = 0; y < H; y += gridDist) {
-
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-
-        }
-
-        // 2. Gorgeous organic hand-sketched double lines around the frame
-
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
-
-        ctx.lineWidth = 1.8;
-
-        // Top sketch lines
-
-        ctx.beginPath(); ctx.moveTo(MX - 15, 38); ctx.lineTo(W - MX + 20, 36); ctx.stroke();
-
-        ctx.beginPath(); ctx.moveTo(MX - 10, 42); ctx.lineTo(W - MX + 15, 40); ctx.stroke();
-
-        // Left sketch lines
-
-        ctx.beginPath(); ctx.moveTo(MX - 8, 25); ctx.lineTo(MX - 10, H - 30); ctx.stroke();
-
-        // Right sketch lines
-
-        ctx.beginPath(); ctx.moveTo(W - MX + 8, 28); ctx.lineTo(W - MX + 6, H - 35); ctx.stroke();
-
-        // Bottom sketch lines
-
-        ctx.beginPath(); ctx.moveTo(MX - 20, H - 38); ctx.lineTo(W - MX + 20, H - 40); ctx.stroke();
-
-        // 3. Faint pencil draft marks / scratches in corners
-
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)'; ctx.lineWidth = 1;
-
-        for (let j = 0; j < 40; j++) {
-
-            const rx = Math.random() * W;
-
-            const ry = Math.random() * H;
-
-            ctx.beginPath(); ctx.moveTo(rx, ry);
-
-            ctx.lineTo(rx + Math.random() * 50 - 25, ry + Math.random() * 50 - 25);
-
-            ctx.stroke();
-
-        }
+        ctx.drawImage(getSketchOverlayCanvas(), 0, 0);
 
         ctx.restore();
 
@@ -4565,37 +4623,8 @@ function renderFrame(currentTime) {
 
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-        // 1. Halftone comic shading dot patterns in borders
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
-
-        const spacing = 20;
-
-        for (let x = spacing / 2; x < W; x += spacing) {
-
-            for (let y = spacing / 2; y < H; y += spacing) {
-
-                const dx = x - W / 2;
-
-                const dy = y - H / 2;
-
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                if (dist > Math.min(W, H) * 0.36) {
-
-                    const size = Math.min(7, (dist - Math.min(W, H) * 0.36) / 45);
-
-                    if (size > 0.6) {
-
-                        ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
-
-                    }
-
-                }
-
-            }
-
-        }
+        // Draw pre-rendered halftone shading dots (Optimized)
+        ctx.drawImage(getCartoonHalftoneCanvas(), 0, 0);
 
         // 2. Thick 8px comic book border outline
 
