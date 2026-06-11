@@ -3192,6 +3192,8 @@ function updateElementsDropdown() {
 
     // Determine active step index
 
+    const tSteps = (currentTiming && currentTiming.steps) || [];
+
     let curStepIdx = _getCurStepIdx(previewTime, tSteps);
 
     const step = currentScript.steps[curStepIdx];
@@ -3247,6 +3249,8 @@ function selectElementFromDropdown(idxStr) {
         return;
 
     }
+
+    const tSteps = (currentTiming && currentTiming.steps) || [];
 
     let curStepIdx = _getCurStepIdx(previewTime, tSteps);
 

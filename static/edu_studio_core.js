@@ -44,6 +44,149 @@ let allSkills = [];          // cache of all skills from API
 
 let _editingSkillId = null;  // skill currently open in editor
 
+let activeRenderPolls = {}; // jobId -> { intervalId, projectId, lessonId, targetAspect, resolves: [], rejects: [] }
+
+function startPollingRenderJob(jobId, projectId, lessonId, targetAspect, resolve = null, reject = null) {
+    if (activeRenderPolls[jobId]) {
+        if (resolve) {
+            activeRenderPolls[jobId].resolves.push(resolve);
+            activeRenderPolls[jobId].rejects.push(reject);
+        }
+        return;
+    }
+
+    let consecutiveFailures = 0;
+    const resolves = resolve ? [resolve] : [];
+    const rejects = reject ? [reject] : [];
+
+    const pollInterval = setInterval(async () => {
+        try {
+            const sr = await fetch(`${API}/status/${jobId}`);
+            if (!sr.ok) {
+                throw new Error(`HTTP ${sr.status}`);
+            }
+            const sdata = await sr.json();
+            consecutiveFailures = 0;
+
+            if (currentLesson && currentLesson.id === lessonId && currentProject && currentProject.id === projectId) {
+                const statusEl = document.getElementById('renderStatus');
+                const msgEl = document.getElementById('renderMsg');
+                const progressEl = document.getElementById('renderProgress');
+                const btn = document.getElementById('btnRender');
+                const btnDual = document.getElementById('btnRenderDual');
+
+                if (statusEl) statusEl.classList.remove('hidden');
+                if (btn) btn.disabled = true;
+                if (btnDual) btnDual.disabled = true;
+                if (msgEl) msgEl.textContent = sdata.message || 'Rendering...';
+                if (progressEl) progressEl.style.width = (sdata.progress || 0) + '%';
+            }
+
+            if (sdata.status === 'done') {
+                clearInterval(pollInterval);
+                delete activeRenderPolls[jobId];
+
+                const videoPath = sdata.result?.path;
+                if (currentLesson && currentLesson.id === lessonId && currentProject && currentProject.id === projectId) {
+                    if (videoPath) {
+                        currentLesson.rendered_video_path = videoPath;
+                        if (targetAspect === '9:16') {
+                            currentLesson.rendered_video_path_9_16 = videoPath;
+                        } else {
+                            currentLesson.rendered_video_path_16_9 = videoPath;
+                        }
+                    }
+                    const msgEl = document.getElementById('renderMsg');
+                    if (msgEl) msgEl.textContent = '✅ Video render hoàn tất!';
+                    const btn = document.getElementById('btnRender');
+                    const btnDual = document.getElementById('btnRenderDual');
+                    if (btn) btn.disabled = false;
+                    if (btnDual) btnDual.disabled = false;
+
+                    currentLesson.status = 'done';
+                    await updateLessonMeta();
+
+                    if (typeof updatePlayerUI === 'function') {
+                        updatePlayerUI();
+                    }
+                }
+                resolves.forEach(res => res(videoPath));
+            } else if (sdata.status === 'error') {
+                clearInterval(pollInterval);
+                delete activeRenderPolls[jobId];
+
+                if (currentLesson && currentLesson.id === lessonId && currentProject && currentProject.id === projectId) {
+                    const msgEl = document.getElementById('renderMsg');
+                    if (msgEl) msgEl.textContent = `❌ Lỗi: ${sdata.message}`;
+                    const btn = document.getElementById('btnRender');
+                    const btnDual = document.getElementById('btnRenderDual');
+                    if (btn) btn.disabled = false;
+                    if (btnDual) btnDual.disabled = false;
+                }
+                rejects.forEach(rej => rej(new Error(sdata.message)));
+            }
+        } catch (e) {
+            consecutiveFailures++;
+            console.warn(`Polling status failure (${consecutiveFailures}):`, e);
+
+            if (currentLesson && currentLesson.id === lessonId && currentProject && currentProject.id === projectId) {
+                const msgEl = document.getElementById('renderMsg');
+                if (msgEl) msgEl.textContent = `⚠️ Đang kết nối lại... (${consecutiveFailures}/15)`;
+            }
+
+            if (consecutiveFailures >= 15) {
+                clearInterval(pollInterval);
+                delete activeRenderPolls[jobId];
+
+                if (currentLesson && currentLesson.id === lessonId && currentProject && currentProject.id === projectId) {
+                    const msgEl = document.getElementById('renderMsg');
+                    if (msgEl) msgEl.textContent = `❌ Lỗi: Mất kết nối tới server.`;
+                    const btn = document.getElementById('btnRender');
+                    const btnDual = document.getElementById('btnRenderDual');
+                    if (btn) btn.disabled = false;
+                    if (btnDual) btnDual.disabled = false;
+                }
+                rejects.forEach(rej => rej(e));
+            }
+        }
+    }, 2000);
+
+    activeRenderPolls[jobId] = {
+        intervalId: pollInterval,
+        projectId,
+        lessonId,
+        targetAspect,
+        resolves,
+        rejects
+    };
+}
+
+async function syncActiveRenders() {
+    if (!currentProject) return;
+    try {
+        const resp = await fetch(`${API}/active-renders`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.active_renders) {
+            const activeJobIds = new Set();
+            data.active_renders.forEach(r => {
+                activeJobIds.add(r.job_id);
+                if (!activeRenderPolls[r.job_id]) {
+                    startPollingRenderJob(r.job_id, r.project_id, r.lesson_id, r.aspect_ratio || '9:16');
+                }
+            });
+            for (const jid in activeRenderPolls) {
+                if (!activeJobIds.has(jid)) {
+                    clearInterval(activeRenderPolls[jid].intervalId);
+                    delete activeRenderPolls[jid];
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Failed to sync active renders:', e);
+    }
+}
+
 // ── URL Hash Synchronization ─────────────────────────────────────
 
 function getHashParams() {
@@ -1294,9 +1437,32 @@ async function selectLesson(lessonId, autoSwitchTab = true) {
 
         }
 
-        const statusEl = document.getElementById('renderStatus');
+        // Sync active renders from backend and check if there's an active render for this lesson
+        await syncActiveRenders();
 
-        if (statusEl) statusEl.classList.add('hidden');
+        let foundActivePoll = false;
+        for (const jobId in activeRenderPolls) {
+            const poll = activeRenderPolls[jobId];
+            if (poll.lessonId === lessonId && poll.projectId === currentProject.id) {
+                foundActivePoll = true;
+                const statusEl = document.getElementById('renderStatus');
+                const btn = document.getElementById('btnRender');
+                const btnDual = document.getElementById('btnRenderDual');
+                if (statusEl) statusEl.classList.remove('hidden');
+                if (btn) btn.disabled = true;
+                if (btnDual) btnDual.disabled = true;
+                break;
+            }
+        }
+
+        if (!foundActivePoll) {
+            const statusEl = document.getElementById('renderStatus');
+            if (statusEl) statusEl.classList.add('hidden');
+            const btn = document.getElementById('btnRender');
+            const btnDual = document.getElementById('btnRenderDual');
+            if (btn) btn.disabled = false;
+            if (btnDual) btnDual.disabled = false;
+        }
 
         // Update direct video player and download links
 
@@ -5955,107 +6121,7 @@ async function renderVideo(overrideAspect = null) {
         const jobId = data.job_id;
 
         return new Promise((resolve, reject) => {
-
-            let consecutiveFailures = 0;
-
-            const poll = setInterval(async () => {
-
-                try {
-
-                    const sr = await fetch(`${API}/status/${jobId}`);
-
-                    if (!sr.ok) {
-
-                        throw new Error(`HTTP ${sr.status}`);
-
-                    }
-
-                    const sdata = await sr.json();
-
-                    consecutiveFailures = 0; // reset on successful fetch
-
-                    msgEl.textContent = sdata.message || 'Rendering...';
-
-                    progressEl.style.width = (sdata.progress || 0) + '%';
-
-                    if (sdata.status === 'done') {
-
-                        clearInterval(poll);
-
-                        const videoPath = sdata.result?.path;
-
-                        if (videoPath) {
-
-                            currentLesson.rendered_video_path = videoPath;
-
-                            if (targetAspect === '9:16') {
-
-                                currentLesson.rendered_video_path_9_16 = videoPath;
-
-                            } else {
-
-                                currentLesson.rendered_video_path_16_9 = videoPath;
-
-                            }
-
-                        }
-
-                        msgEl.textContent = '✅ Video render hoàn tất!';
-
-                        btn.disabled = false;
-
-                        // Cập nhật trạng thái
-
-                        currentLesson.status = 'done';
-
-                        await updateLessonMeta();
-
-                        // Cập nhật video player UI
-
-                        if (typeof updatePlayerUI === 'function') {
-
-                            updatePlayerUI();
-
-                        }
-
-                        resolve(videoPath);
-
-                    } else if (sdata.status === 'error') {
-
-                        clearInterval(poll);
-
-                        msgEl.textContent = `❌ Lỗi: ${sdata.message}`;
-
-                        btn.disabled = false;
-
-                        reject(new Error(sdata.message));
-
-                    }
-
-                } catch (e) {
-
-                    consecutiveFailures++;
-
-                    console.warn(`Polling status failure (${consecutiveFailures}):`, e);
-
-                    msgEl.textContent = `⚠️ Đang kết nối lại... (${consecutiveFailures}/15)`;
-
-                    if (consecutiveFailures >= 15) {
-
-                        clearInterval(poll);
-
-                        msgEl.textContent = `❌ Lỗi: Mất kết nối tới server.`;
-
-                        btn.disabled = false;
-
-                        reject(e);
-
-                    }
-
-                }
-
-            }, 2000);
-
+            startPollingRenderJob(jobId, currentProject.id, currentLesson.id, targetAspect, resolve, reject);
         });
 
     } catch (err) {

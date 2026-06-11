@@ -1,7 +1,7 @@
 {
   "name": "edu_video_studio",
   "display_name": "EduVideo Studio",
-  "version": "2026.06.11.09",
+  "version": "2026.06.11.0933",
   "description": "Tạo video dạy học step-by-step — AI sinh kịch bản, animation tự động, voice đồng bộ",
   "author": "TubeCreate",
   "entry": "extension.py",

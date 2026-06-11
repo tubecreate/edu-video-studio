@@ -2370,7 +2370,8 @@ async def render_video(request: Request):
         "lesson_id": lesson_id,
         "project_title": project_title,
         "lesson_title": lesson_title,
-        "start_time": time.time()
+        "start_time": time.time(),
+        "aspect_ratio": aspect_ratio
     }
 
     async def _run():
@@ -2417,7 +2418,8 @@ async def get_active_renders():
                 "lesson_title": job.get("lesson_title", "Không rõ"),
                 "progress": job.get("progress", 0),
                 "message": job.get("message", ""),
-                "start_time": job.get("start_time", 0)
+                "start_time": job.get("start_time", 0),
+                "aspect_ratio": job.get("aspect_ratio", "9:16")
             })
     return {"active_renders": active}
 
