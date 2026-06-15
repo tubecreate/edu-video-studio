@@ -49,34 +49,71 @@ class EduVideoExtension(Extension):
         """Register skill for chatbot routing."""
         try:
             from tubecli.core.skill import skill_manager
+            from tubecli.config import get_language
+
             existing = skill_manager.find_by_name("EduVideo Studio")
-            if existing:
-                return
-            skill_manager.create(
-                name="EduVideo Studio",
-                description=(
+            lang = get_language()
+
+            if lang == "vi":
+                desc = (
                     "Tạo video dạy học step-by-step từ ảnh bìa sách hoặc text. "
                     "AI tự phân tích, sinh kịch bản, animation, voice TTS đồng bộ. "
                     "Hỗ trợ toán học, khoa học, kỹ năng."
-                ),
-                skill_type="Extension Skill",
-                commands=[
+                )
+                cmds = [
                     "tạo video dạy học", "edu video", "video bài giảng",
                     "tutorial video", "math video", "giải toán video",
-                ],
-                workflow_data={
-                    "extension": "edu_video_studio",
-                    "action": "create_edu_video",
-                    "sop": (
-                        "1. Mở EduVideo Studio tại /edu-video-studio\n"
-                        "2. Upload ảnh hoặc nhập text bài học\n"
-                        "3. AI phân tích và sinh kịch bản\n"
-                        "4. Chọn theme, voice, preview\n"
-                        "5. Export video MP4\n"
-                    ),
-                },
-            )
-            logger.info("✅ EduVideo Studio skill registered.")
+                ]
+                sop = (
+                    "1. Mở EduVideo Studio tại /edu-video-studio\n"
+                    "2. Upload ảnh hoặc nhập text bài học\n"
+                    "3. AI phân tích và sinh kịch bản\n"
+                    "4. Chọn theme, voice, preview\n"
+                    "5. Export video MP4\n"
+                )
+            else:
+                desc = (
+                    "Create step-by-step educational videos from book covers or text. "
+                    "AI automatically analyzes, generates scripts, animations, and synced TTS voice. "
+                    "Supports math, science, and skill subjects."
+                )
+                cmds = [
+                    "create educational video", "edu video", "lecture video",
+                    "tutorial video", "math video", "solve math video",
+                ]
+                sop = (
+                    "1. Open EduVideo Studio at /edu-video-studio\n"
+                    "2. Upload an image or enter lesson text\n"
+                    "3. AI analyzes and generates script\n"
+                    "4. Choose theme, voice, preview\n"
+                    "5. Export MP4 video\n"
+                )
+
+            if not existing:
+                skill_manager.create(
+                    name="EduVideo Studio",
+                    description=desc,
+                    skill_type="Extension Skill",
+                    commands=cmds,
+                    workflow_data={
+                        "extension": "edu_video_studio",
+                        "action": "create_edu_video",
+                        "sop": sop,
+                    },
+                )
+                logger.info("✅ EduVideo Studio skill registered.")
+            else:
+                skill_manager.update(
+                    existing.id,
+                    description=desc,
+                    commands=cmds,
+                    workflow_data={
+                        "extension": "edu_video_studio",
+                        "action": "create_edu_video",
+                        "sop": sop,
+                    },
+                )
+                logger.info("⚡ EduVideo Studio skill updated/synced.")
         except Exception as e:
             logger.warning(f"Could not register skill: {e}")
 
